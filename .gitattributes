@@ -1,0 +1,7 @@
+# Shell scripts must stay LF so Git Bash runs them after a Windows checkout
+*.sh text eol=lf
+# Normalize the rest as UTF-8 text
+*.java text
+*.py   text
+*.ps1  text
+*.md   text

@@ -1,0 +1,21 @@
+# Build working tree (decoded APK, compiled classes, dex, intermediate APKs)
+/work/
+
+# Per-APK generated source (written by tools/derive.py on every run)
+/gen/
+
+# Signing key — auto-created on first run; keep your own copy, never commit it
+*.keystore
+
+# APKs are never committed (input is a third-party binary; output is derived from it)
+*.apk
+*.idsig
+
+# Compiled artifacts
+*.class
+*.dex
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
