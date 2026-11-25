@@ -34,6 +34,7 @@ import java.util.Map;
 public final class NavNotifier {
     private static final String TAG = "WazeNavNotifier";
     private static final String MANAGER = "com.waze.navigate.NavigationInfoNativeManager";
+    private static final String TG_MANAGER = "com.waze.navigate.NavigationTurnGuidanceNativeManager";
     private static final String CHANNEL = "waze_nav_instructions";
     private static final int NOTIFICATION_ID = 0x5A7E;
     private static final long MIN_INTERVAL_MS = 1000;
@@ -55,6 +56,7 @@ public final class NavNotifier {
     // callback is handed the next-turn distance instead (a Waze bug). Resolved once at register(), read at publish.
     private Object managerInstance;
     private Field remainingField;
+    private boolean infoRegistered;
 
     private long lastPost;
     private boolean scheduled;
@@ -68,18 +70,23 @@ public final class NavNotifier {
     /** Called first thing in Waze's Application.onCreate (hook added in smali). */
     public static void install(final Application app) {
         try {
+            ClusterLayout.install(app);
             final NavNotifier n = new NavNotifier(app);
             NotificationChannel ch = new NotificationChannel(CHANNEL, "Navigation instructions", NotificationManager.IMPORTANCE_LOW);
             ch.setShowBadge(false);
             n.nm.createNotificationChannel(ch);
             // Register after Waze's own start-up has finished.
             n.main.post(new Runnable() {
+                int tries;
                 @Override public void run() {
                     try {
-                        n.register();
+                        if (!n.infoRegistered) n.register();
+                        if (!NavMap.TG_LOOKUP_CLASS.isEmpty()) n.registerTurnGuidance();
                         Log.i(TAG, "registered");
                     } catch (Throwable t) {
-                        Log.w(TAG, "register failed", t);
+                        // Waze's DI container may not be up yet on the first pass: retry for about half a minute.
+                        if (++tries < 15) n.main.postDelayed(this, 2000);
+                        else Log.w(TAG, "register failed", t);
                     }
                 }
             });
@@ -116,6 +123,25 @@ public final class NavNotifier {
         Object proxy = Proxy.newProxyInstance(mgr.getClassLoader(), new Class[]{listener}, new Dispatch());
         addListener.setAccessible(true);
         addListener.invoke(instance, proxy);
+        infoRegistered = true;
+    }
+
+    /** 5.28+: instruction, turn distance, exit and next street come from the turn-guidance manager's own feed. */
+    private void registerTurnGuidance() throws Exception {
+        Class<?> mgr = Class.forName(TG_MANAGER);
+        Method lookup = Class.forName(NavMap.TG_LOOKUP_CLASS).getDeclaredMethod(NavMap.TG_LOOKUP_METHOD, Class.class);
+        lookup.setAccessible(true);
+        Object instance = lookup.invoke(null, mgr);   // Waze's DI singleton; there is no static getInstance
+        for (Method m : mgr.getDeclaredMethods()) {
+            Class<?>[] p = m.getParameterTypes();
+            if (m.getName().equals(NavMap.TG_ADD_LISTENER) && p.length == 2 && p[0].isInterface() && p[1] == boolean.class) {
+                Object proxy = Proxy.newProxyInstance(mgr.getClassLoader(), new Class[]{p[0]}, new Dispatch());
+                m.setAccessible(true);
+                m.invoke(instance, proxy, true);   // true: replay the current state now
+                return;
+            }
+        }
+        throw new NoSuchMethodException("turn-guidance addListener " + NavMap.TG_ADD_LISTENER);
     }
 
     /** Turns Waze's listener callbacks (dispatched by name) into our notification state. */

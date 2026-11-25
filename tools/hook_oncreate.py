@@ -1,31 +1,36 @@
-"""Insert the NavNotifier.install call as the first instruction of an Application.onCreate smali method.
+"""Insert NavNotifier.install(Application) as the first instruction of Application.onCreate.
 
 Usage: python -I hook_oncreate.py <Application.smali>
-p0 is the Application at the top of onCreate, so the hook runs before Waze's own start-up. Idempotent; fails if
-onCreate()V is absent so a wrong app class cannot pass silently. Shared by patch.sh and patch.ps1.
+
+p0 is the Application, so it runs before Waze's own start-up; fails if onCreate()V is absent so a wrong app class
+cannot pass silently. Idempotent.
 """
 import pathlib
 import re
 import sys
 
-HOOK = "\n    invoke-static {p0}, Lcom/carlosrpg/wazenotify/NavNotifier;->install(Landroid/app/Application;)V\n"
+HOOKS = {
+    "oncreate": (r"onCreate\(\)V",
+                 "invoke-static {p0}, Lcom/carlosrpg/wazenotify/NavNotifier;->install(Landroid/app/Application;)V"),
+}
 
 
-def main(smali):
+def main(smali, kind="oncreate"):
+    method, call = HOOKS[kind]
     p = pathlib.Path(smali)
     text = p.read_text(encoding="utf-8")
-    if "Lcom/carlosrpg/wazenotify/NavNotifier;->install" in text:
-        print("onCreate already hooked")
+    if call in text:
+        print(f"{kind} already hooked")
         return 0
-    m = re.search(r"^\.method public (?:final )?onCreate\(\)V\s*$", text, re.M)
-    assert m, f"onCreate()V not found in {smali}"
+    m = re.search(r"^\.method (?:public |protected )?(?:final )?" + method + r"\s*$", text, re.M)
+    assert m, f"{method} not found in {smali}"
     pos = text.index("\n", text.index(".locals", m.end())) + 1
     while True:  # method annotations/params must stay before the first instruction
         if not re.match(r"\s*\.(annotation|param)\b", text[pos:]):
             break
         pos = text.index("\n", text.index(".end annotation", pos)) + 1
-    p.write_text(text[:pos] + HOOK + text[pos:], encoding="utf-8")
-    print("onCreate hooked")
+    p.write_text(text[:pos] + "\n    " + call + "\n" + text[pos:], encoding="utf-8")
+    print(f"{kind} hooked")
     return 0
 
 

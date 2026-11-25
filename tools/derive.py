@@ -15,12 +15,21 @@ Derived structurally (robust to renames):
   - M_NAVSTATE : the interface method with descriptor (Z,I).
 Defaulted to the stable letters and verified by signature (and confirmed via the manager's handler names when
 those are descriptive): M_DISTANCE=E, M_ETA=k, M_NEXTSTREET=s, M_EXIT=m.
+
+Split feed (5.28+): when the info listener no longer carries the instruction enum, the turn data (instruction,
+distance to the turn, roundabout exit, next street) comes from NavigationTurnGuidanceNativeManager's own listener.
+That manager has no static getInstance; it comes from Waze's DI lookup (TG_LOOKUP_CLASS.TG_LOOKUP_METHOD(Class)),
+found as the static (Class)Object call that follows a const-class of the manager. Its listener letters are
+obfuscated and come in look-alike pairs (current/next instruction, three (I) callbacks, two street callbacks), so
+each is traced from the manager's descriptive JNI entry point (onCurrentInstructionChangedJNI, ...) through the
+posted runnable's switch case to the manager method and the listener method that method invokes.
 """
 import pathlib
 import re
 import sys
 
 MANAGER_REL = "com/waze/navigate/NavigationInfoNativeManager.smali"
+TG = "com/waze/navigate/NavigationTurnGuidanceNativeManager"
 STREET_DESC = "Ljava/lang/String;ZILcom/waze/jni/protos/navigate/NavigationRoadSign;"
 SS_I = "Ljava/lang/String;Ljava/lang/String;I"
 
@@ -64,6 +73,11 @@ def main(decode_dir, out_java):
     assert itf_path, f"interface {interface} not found"
     methods = smali_methods(itf_path.read_text(encoding="utf-8"))
 
+    def read(rel):
+        f = next(root.glob(f"smali*/{rel}"), None)
+        assert f, f"{rel} not found"
+        return f.read_text(encoding="utf-8")
+
     def letter_with(params, ret="V"):
         return [n for n, sigs in methods.items() if any(p == params and r == ret for p, r in sigs)]
 
@@ -86,8 +100,10 @@ def main(decode_dir, out_java):
     # DistanceUpdate's getRawMeters(). Its (I) listener is handed the next-turn distanceMeters instead (a Waze bug),
     # so the notifier reads this field at publish rather than trusting the listener value.
     def eta_distance_field():
-        for m in re.finditer(r"^\.method[^\n]*? (\w+)\(Lcom/waze/jni/protos/navigate/DistanceUpdate;\)V\s*$", mgr, re.M):
-            if "etadistance" in m.group(1).lower():
+        found = list(re.finditer(r"^\.method[^\n]*? (\w+)\(Lcom/waze/jni/protos/navigate/DistanceUpdate;\)V\s*$",
+                                 mgr, re.M))
+        for m in found:   # 5.28 obfuscates the handler name; then it is the only DistanceUpdate handler
+            if "etadistance" in m.group(1).lower() or len(found) == 1:
                 body = method_body(mgr, m.group(1), "Lcom/waze/jni/protos/navigate/DistanceUpdate;")
                 fm = re.search(r"getRawMeters\(\)I.*?iput v\d+, p0, L[\w$/]+;->(\w+):I", body, re.S)
                 if fm:
@@ -102,32 +118,80 @@ def main(decode_dir, out_java):
             return next(iter(hit))
         return default if default in cands else sorted(cands)[0]
 
-    # Instruction: enum-param method; prefer the one driven by onCurrentInstructionChanged over onNextInstruction.
     enum_cands = {n for n, sigs in methods.items()
                   if any(re.fullmatch(r"L[\w/]+;", p) and r == "V" and is_enum(p) for p, r in sigs)}
-    assert enum_cands, "no interface method takes the instruction enum"
-    cur = called_letters(lambda n: "current" in n and "instruction" in n) & enum_cands
-    m_instruction = next(iter(cur)) if len(cur) == 1 else ("d" if "d" in enum_cands else sorted(enum_cands)[0])
-
     m_navstate = resolve("p", "ZI", None, "nav state")
     m_eta = resolve("k", SS_I, called_letters(lambda n: "eta" in n), "eta")
-    m_distance = resolve("E", SS_I,
-                         (called_letters(lambda n: "instructiondistance" in n) or
-                          called_letters(lambda n: "distance" in n and "eta" not in n)) - {m_eta}, "distance")
-    m_next = resolve("s", STREET_DESC, called_letters(lambda n: "next" in n and "name" in n), "next street")
-    m_exit = resolve("m", "I", None, "roundabout exit")
-    # onEtaDistanceChanged's (I) listener fires on every eta-distance change (a good publish trigger) but is handed
-    # the next-turn distanceMeters, not the total — so it is kept only as a trigger; REMAINING_FIELD is the value.
-    m_remaining = resolve("F", "I", called_letters(lambda n: "etadistance" in n), "remaining distance")
     remaining_field = eta_distance_field()
-    assert remaining_field, "remaining-distance field (getRawMeters -> iput in onEtaDistanceChanged) not found"
-    assert len({m_distance, m_eta}) == 2, f"distance and eta resolved to the same letter {m_distance}"
+    assert remaining_field, "remaining-distance field (getRawMeters -> iput in the eta DistanceUpdate handler) not found"
+    tg = {"TG_LOOKUP_CLASS": "", "TG_LOOKUP_METHOD": "", "TG_ADD_LISTENER": ""}
+
+    if enum_cands:   # one feed (up to 5.27): everything on the info listener
+        # Instruction: prefer the one driven by onCurrentInstructionChanged over onNextInstruction.
+        cur = called_letters(lambda n: "current" in n and "instruction" in n) & enum_cands
+        m_instruction = next(iter(cur)) if len(cur) == 1 else ("d" if "d" in enum_cands else sorted(enum_cands)[0])
+        m_distance = resolve("E", SS_I,
+                             (called_letters(lambda n: "instructiondistance" in n) or
+                              called_letters(lambda n: "distance" in n and "eta" not in n)) - {m_eta}, "distance")
+        m_next = resolve("s", STREET_DESC, called_letters(lambda n: "next" in n and "name" in n), "next street")
+        m_exit = resolve("m", "I", None, "roundabout exit")
+        # onEtaDistanceChanged's (I) listener fires on every eta-distance change (a good publish trigger) but is
+        # handed the next-turn distance, not the total: kept only as a trigger; REMAINING_FIELD is the value.
+        m_remaining = resolve("F", "I", called_letters(lambda n: "etadistance" in n), "remaining distance")
+        assert len({m_distance, m_eta}) == 2, f"distance and eta resolved to the same letter {m_distance}"
+    else:            # split feed (5.28+): turn data on NavigationTurnGuidanceNativeManager's listener
+        m_remaining = resolve("t", "I", None, "remaining distance")
+        tg_text = read(f"{TG}.smali")
+        base_text = read(f"{TG}Base.smali")
+        tg_add = tg_itf = None
+        for m in re.finditer(r"^\.method public (?:final )?(\w+)\(L(com/waze/navigate/\w+);Z\)V\s*$", tg_text, re.M):
+            if "Ljava/util/Set;->add(" in method_body(tg_text, m.group(1), f"L{m.group(2)};Z"):
+                tg_add, tg_itf = m.group(1), m.group(2)
+        assert tg_add, "turn-guidance addListener(listener, replay) not found"
+        lookups = []
+        for f in root.glob("smali*/com/waze/**/*.smali"):
+            lookups += re.findall(r"const-class (v\d+), L" + TG + r";(?:\s+\.line \d+)*\s+invoke-static \{\1\}, L([\w/$]+);->(\w+)"
+                                  r"\(Ljava/lang/Class;\)Ljava/lang/Object;", f.read_text(encoding="utf-8"))
+        assert lookups, "DI lookup of the turn-guidance manager not found"
+        _, lk_cls, lk_m = max(set(lookups), key=lookups.count)
+        tg = {"TG_LOOKUP_CLASS": lk_cls.replace("/", "."), "TG_LOOKUP_METHOD": lk_m, "TG_ADD_LISTENER": tg_add}
+        tg_methods = smali_methods(read(f"{tg_itf}.smali"))
+
+        def traced(jni):
+            """Listener letters reached from the manager's JNI entry point `jni`, via the runnable it posts."""
+            params = re.search(rf" {jni}\(([^)]*)\)", base_text).group(1)
+            body = method_body(base_text, jni, params)
+            r = re.search(r"new-instance (v\d+), L([\w/$]+);.*?const(?:/4|/16)? v\d+, (-?0x[0-9a-f]+|-?\d+)\s+(?:\.line \d+\s+)*"
+                          r"invoke-direct \{\1[^}]*\}, L\2;-><init>", body, re.S)
+            assert r, f"{jni}: posted runnable not found"
+            run = method_body(read(f"{r.group(2)}.smali"), "run", "")
+            sw = re.search(r"\.packed-switch (-?0x[0-9a-f]+|-?\d+)\s+(.*?)\.end packed-switch", run, re.S)
+            label = re.findall(r":(pswitch_\w+)", sw.group(2))[int(r.group(3), 0) - int(sw.group(1), 0)]
+            seg = run[run.index(f":{label}\n"):]
+            mm = re.search(r"L" + TG + r";->(\w+)\(([^)]*)\)V", seg)
+            return re.findall(rf"L{re.escape(tg_itf)};->(\w+)\(", method_body(tg_text, mm.group(1), mm.group(2)))
+
+        def one(jni, params):
+            hits = [x for x in dict.fromkeys(traced(jni)) if any(p == params for p, _ in tg_methods.get(x, []))]
+            assert len(hits) == 1, f"{jni}: expected one listener method taking ({params}), got {hits}"
+            return hits[0]
+
+        enum_desc = next(p for sigs in tg_methods.values() for p, _ in sigs if is_enum(p))
+        m_instruction = one("onCurrentInstructionChangedJNI", enum_desc)
+        m_distance = one("onCurrentInstructionDistanceChangedJNI", SS_I)
+        m_exit = one("onExitNumberChangedJNI", "I")
+        m_next = one("onNextNameChangedJNI", STREET_DESC)
+        # both proxies dispatch by name alone, so no letter may exist on the other feed's interface
+        clash = ({m_instruction, m_distance, m_exit, m_next} & set(methods)) | \
+                ({m_navstate, m_eta, m_remaining} & set(tg_methods))
+        assert not clash, f"letters {clash} exist on both listener interfaces"
+        interface = f"{interface} + {tg_itf}"
 
     fields = {
         "GET_INSTANCE": get_instance, "ADD_LISTENER": add_listener,
         "M_NAVSTATE": m_navstate, "M_INSTRUCTION": m_instruction, "M_DISTANCE": m_distance,
         "M_EXIT": m_exit, "M_NEXTSTREET": m_next, "M_ETA": m_eta, "M_REMAINING": m_remaining,
-        "REMAINING_FIELD": remaining_field,
+        "REMAINING_FIELD": remaining_field, **tg,
     }
     lines = "\n".join(f'    static final String {k} = "{v}";' for k, v in fields.items())
     pathlib.Path(out_java).write_text(

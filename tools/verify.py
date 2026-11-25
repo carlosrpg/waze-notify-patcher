@@ -1,6 +1,6 @@
-"""Check the patched APK: notifier present, hook wired, nothing but dex changed.
+"""Check the patched APK: notifier present, hook wired, nothing but dex (and the renamed manifest/table) changed.
 
-Usage: python -I verify.py <out.apk> <original.apk>
+Usage: python -I verify.py <out.apk> <original.apk> [renamed]
 """
 import re
 import sys
@@ -17,14 +17,16 @@ def is_signing(n):
     return n == "stamp-cert-sha256" or bool(re.fullmatch(r"META-INF/(MANIFEST\.MF|[^/]+\.(SF|RSA|DSA|EC))", n))
 
 
-def main(out, original):
+def main(out, original, renamed=None):
+    identity = {"AndroidManifest.xml", "resources.arsc"} if renamed else set()
     with zipfile.ZipFile(out) as z, zipfile.ZipFile(original) as o:
         dexes = sorted((n for n in z.namelist() if n.startswith("classes") and n.endswith(".dex")), key=dex_index)
         notifier = z.read(dexes[-1])
         missing = {n for n in set(o.namelist()) - set(z.namelist()) if not is_signing(n)}
         kept = set(z.namelist())
         changed = [n for n in o.namelist()
-                   if n in kept and not n.endswith(".dex") and not is_signing(n) and z.read(n) != o.read(n)]
+                   if n in kept and not n.endswith(".dex") and not is_signing(n) and n not in identity
+                   and z.read(n) != o.read(n)]
         hooked = any(b"Lcom/carlosrpg/wazenotify/NavNotifier;" in z.read(n) for n in dexes[:-1])
     problems = []
     if missing:
@@ -44,4 +46,4 @@ def main(out, original):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1], sys.argv[2]))
+    sys.exit(main(*sys.argv[1:4]))
