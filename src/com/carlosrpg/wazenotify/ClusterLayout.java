@@ -8,6 +8,8 @@ import android.os.Looper;
 import android.util.Log;
 import android.view.Display;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.view.ViewTreeObserver;
 
 import java.io.File;
@@ -21,8 +23,8 @@ import java.util.Properties;
  * Our part of Waze's instrument-cluster layout, on top of the ported JConfig patches (tools/port_jconfig.py), which
  * own the rest (ETA box, alert overlay, phone UI). When a Waze window is on a landscape display other than the
  * default one (the cluster), only a central ellipse of it is visible; there this shrinks Waze's turn-by-turn box and
- * moves it to the ellipse's north-west, and keeps the car marker centred between the speedometer and the ETA.
- * Back on the centre display the turn box is restored.
+ * moves it to the ellipse's north-west, puts the car marker just above the ETA box and moves Waze's speedometer
+ * (with its speed-limit sign) to the car's right. Back on the centre display the turn box and speedometer are restored.
  *
  * Positions are fractions of the cluster window. They can be tuned without rebuilding: put keys from {@link #load}
  * in /sdcard/Android/data/com.waze/files/cluster.properties and send Waze to the cluster again.
@@ -32,10 +34,10 @@ public final class ClusterLayout implements Application.ActivityLifecycleCallbac
 
     // shortcut: values from a single read per attach; a file edit needs Waze to move display (or restart).
     private static float navX = 0.3f, navTop = 0.3f, navScale = 0.8f;
-    // car marker (JConfig's own height is 0.8; lower = higher on screen). Waze swaps the ETA box for a full-width bar
-    // while an alert shows, so that state gets its own height. Both put the car between the speedometer and the ETA
-    // (tuned driving on a 1440x540 emulator cluster).
-    private static float carX = 0.5f, carY = 0.62f, carYAlert = 0.69f;
+    // car marker (JConfig's own height is 0.8; lower = higher on screen). The alert state has its own height (car.y.alert),
+    // kept from when Waze's ETA changed shape during alerts. car.y puts the car where the speedometer sits, just
+    // above the ETA box (emulator cluster at the car's 1920x720); speed.dx then moves the speedometer right, clear of it.
+    private static float carX = 0.5f, carY = 0.71f, carYAlert = 0.71f, speedDx = 0.03f, speedScale = 1.4f;
 
     /** True while a Waze window is on the cluster. */
     private static volatile boolean clusterActive;
@@ -89,13 +91,28 @@ public final class ClusterLayout implements Application.ActivityLifecycleCallbac
             if (cluster && !was) load();
             root.setTag(R_ON_CLUSTER, cluster);
             View nav = navBox(root);
+            View speed = byName(root, "Speedometer");   // holds the dial and the speed-limit sign
             if (cluster) {
                 currentRoot = root;
                 clusterActive = true;
                 if (nav != null) placeNav(root, nav);
+                if (speed != null) {
+                    // the shifted view leaves its (dial-sized) parents, which would clip it
+                    for (ViewParent p = speed.getParent(); p instanceof ViewGroup && p != root; p = p.getParent()) {
+                        if (((ViewGroup) p).getClipChildren()) ((ViewGroup) p).setClipChildren(false);
+                    }
+                    // grow from the left edge, away from the car
+                    speed.setPivotX(0f);
+                    speed.setPivotY(speed.getHeight() / 2f);
+                    speed.setScaleX(speedScale);
+                    speed.setScaleY(speedScale);
+                    float tx = speedDx * root.getWidth();
+                    if (Math.abs(tx - speed.getTranslationX()) > 0.5f) speed.setTranslationX(tx);
+                }
                 startReanchor();
             } else if (was) {
                 if (nav != null) { nav.setScaleX(1f); nav.setScaleY(1f); nav.setTranslationX(0f); nav.setTranslationY(0f); }
+                if (speed != null) { speed.setScaleX(1f); speed.setScaleY(1f); speed.setTranslationX(0f); }
                 if (currentRoot == root) { currentRoot = null; clusterActive = false; }
             }
         } catch (Throwable t) {
@@ -105,9 +122,13 @@ public final class ClusterLayout implements Application.ActivityLifecycleCallbac
 
     /** Waze's turn-by-turn box: the parent of its lane-guidance view (resource names survive obfuscation). */
     private static View navBox(View root) {
-        int id = root.getResources().getIdentifier("laneGuidanceView", "id", root.getContext().getPackageName());
-        View lane = id == 0 ? null : root.findViewById(id);
+        View lane = byName(root, "laneGuidanceView");
         return lane != null && lane.getParent() instanceof View ? (View) lane.getParent() : null;
+    }
+
+    private static View byName(View root, String idName) {
+        int id = root.getResources().getIdentifier(idName, "id", root.getContext().getPackageName());
+        return id == 0 ? null : root.findViewById(id);
     }
 
     /** Scale about the top-left corner, then put the box's top centre at (navX, navTop) of the window. */
@@ -126,7 +147,22 @@ public final class ClusterLayout implements Application.ActivityLifecycleCallbac
         if (Math.abs(ty - nav.getTranslationY()) > 0.5f) nav.setTranslationY(ty);
     }
 
+    // ---- ETA box ----------------------------------------------------------------------------------------------
+    // While an alert shows, Waze hides its ETA drawer (the centred box on the cluster) and shows a full-width compact
+    // bar instead. tools/port_jconfig.py routes both visibility flags here: on the cluster the box always stays.
+
+    public static boolean etaDrawerVisible(boolean waze) { return clusterActive || waze; }
+
+    public static boolean compactEtaVisible(boolean waze) { return !clusterActive && waze; }
+
     // ---- car marker -----------------------------------------------------------------------------------------
+
+    // car.x / car.y are fractions of Waze's map viewport. Waze sometimes leaves room in it for the ETA drawer and
+    // sometimes not (it depends on how the window reached the cluster), which put the car at two different heights;
+    // tools/port_jconfig.py routes the viewport's height and offset here so on the cluster it is the whole window.
+    public static float viewportHeight(float waze) { return clusterActive ? 1f : waze; }
+
+    public static float viewportOffsetY(float waze) { return clusterActive ? 0f : waze; }
 
     /** JConfig's car-marker height on the cluster (tools/port_jconfig.py routes it here). */
     public static float jconfigCarY(float jconfigValue) { return carYNow(); }
@@ -190,7 +226,7 @@ public final class ClusterLayout implements Application.ActivityLifecycleCallbac
     }
 
     /** Optional on-car tuning (fractions of the window): nav.x, nav.top, nav.scale (turn box), car.x, car.y,
-     *  car.y.alert (car marker; .alert while an alert shows). */
+     *  car.y.alert (car marker; .alert while an alert shows), speed.dx (speedometer shift to the right), speed.scale (its size). */
     private static void load() {
         File f = new File(app.getExternalFilesDir(null), "cluster.properties");
         if (!f.isFile()) return;
@@ -199,6 +235,7 @@ public final class ClusterLayout implements Application.ActivityLifecycleCallbac
             p.load(in);
             navX = num(p, "nav.x", navX); navTop = num(p, "nav.top", navTop); navScale = num(p, "nav.scale", navScale);
             carX = num(p, "car.x", carX); carY = num(p, "car.y", carY); carYAlert = num(p, "car.y.alert", carYAlert);
+            speedDx = num(p, "speed.dx", speedDx); speedScale = num(p, "speed.scale", speedScale);
             Log.i(TAG, "tuning " + p);
         } catch (Throwable t) {
             Log.w(TAG, "cluster.properties unreadable", t);
