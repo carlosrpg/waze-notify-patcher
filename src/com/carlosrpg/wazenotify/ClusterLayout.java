@@ -42,8 +42,8 @@ public final class ClusterLayout implements Application.ActivityLifecycleCallbac
     /** True while a Waze window is on the cluster. */
     private static volatile boolean clusterActive;
 
-    private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    private static Application app;
+    static final Handler MAIN = new Handler(Looper.getMainLooper());
+    static Application app;
     private static View currentRoot;
 
     /** Called from NavNotifier.install (first thing in Application.onCreate). */
@@ -53,12 +53,15 @@ public final class ClusterLayout implements Application.ActivityLifecycleCallbac
     }
 
     @Override public void onActivityCreated(Activity a, Bundle b) { attach(a); }
-    @Override public void onActivityResumed(Activity a) { attach(a); }
+    @Override public void onActivityResumed(Activity a) { attach(a); Updater.onResume(a); }
     @Override public void onActivityStarted(Activity a) {}
     @Override public void onActivityPaused(Activity a) {}
     @Override public void onActivityStopped(Activity a) {}
     @Override public void onActivitySaveInstanceState(Activity a, Bundle b) {}
-    @Override public void onActivityDestroyed(Activity a) {}
+    @Override public void onActivityDestroyed(Activity a) {
+        // closed while on the cluster: no window is left there, so the floating button goes too
+        if (a.getWindow().getDecorView() == currentRoot) { currentRoot = null; clusterActive = false; ClusterButton.floating(app, false); }
+    }
 
     /** One layout listener per window; it re-checks the display on every pass, so a move between displays is seen. */
     private static void attach(Activity a) {
@@ -78,6 +81,8 @@ public final class ClusterLayout implements Application.ActivityLifecycleCallbac
     // A tag key needs a resource-id-shaped int; these are in the app package range and unused by Waze.
     private static final int R_LISTENER = 0x7f5a7e01;
     private static final int R_ON_CLUSTER = 0x7f5a7e02;
+
+    static boolean onCluster() { return clusterActive; }
 
     private static boolean onCluster(View root) {
         Display d = root.getDisplay();
@@ -115,6 +120,8 @@ public final class ClusterLayout implements Application.ActivityLifecycleCallbac
                 if (speed != null) { speed.setScaleX(1f); speed.setScaleY(1f); speed.setTranslationX(0f); }
                 if (currentRoot == root) { currentRoot = null; clusterActive = false; }
             }
+            ClusterButton.floating(app, clusterActive);
+            ClusterButton.remember(root);
         } catch (Throwable t) {
             Log.w(TAG, "apply failed", t);
         }

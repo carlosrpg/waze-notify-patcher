@@ -18,7 +18,8 @@ def is_signing(n):
 
 
 def main(out, original, renamed=None):
-    identity = {"AndroidManifest.xml", "resources.arsc"} if renamed else set()
+    # the manifest always gains the install permission; the resource table only changes with the application id
+    identity = {"AndroidManifest.xml", "resources.arsc"} if renamed else {"AndroidManifest.xml"}
     with zipfile.ZipFile(out) as z, zipfile.ZipFile(original) as o:
         dexes = sorted((n for n in z.namelist() if n.startswith("classes") and n.endswith(".dex")), key=dex_index)
         notifier = z.read(dexes[-1])

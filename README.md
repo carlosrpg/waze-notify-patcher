@@ -48,13 +48,15 @@ workflow artifact on pull requests, and as a GitHub release on `main`. Signing c
 
 ## What it changes
 
-1. Compiles `NavText` + `NavNotifier` + `ClusterLayout` + `JconfigBridge` + a generated `NavMap` to one dex,
-   added after the last `classesN.dex`.
+1. Compiles everything in `src/` plus the generated `NavMap` and `BuildInfo` to one dex, added after the last
+   `classesN.dex`.
 2. Inserts one instruction at the top of the app's `Application.onCreate` (found from the manifest):
    `invoke-static … NavNotifier->install(Application)`.
 3. The ported JConfig classes and their hooks in Waze's code (unless `JCONFIG=`).
-4. The application id (manifest package, provider authorities, Waze's own permissions, resource table package).
-5. Re-signs. Resources and native libs are copied byte-for-byte from the original APK (only the dex are taken
+4. The application id (manifest package, provider authorities, Waze's own permissions, resource table package)
+   and the install permission in the manifest.
+5. One more button in Waze's map-button column (the cluster toggle).
+6. Re-signs. Resources and native libs are copied byte-for-byte from the original APK (only the dex are taken
    from the apktool rebuild; apktool corrupts resources by case-collision on Windows).
 
 `tools/verify.py` confirms the notifier is present, the hook is wired, and nothing else changed.
@@ -69,7 +71,36 @@ shows the full-width ETA bar). Tune it without rebuilding in
 `car.y`, `car.y.alert`, `speed.dx` (speedometer shift to the right; all fractions of the window), `speed.scale`, then send Waze to
 the cluster again.
 
-`ClusterButton.java` (a "send to cluster" button on the main screen) is kept in `src/` but not built.
+### Cluster button
+
+`tools/hook_cluster_button.py` adds a button to Waze's own map-button column, right after the sound button (drawn
+by Waze's button composable, so it has the same size and style and hides with the others). A tap moves the running
+Waze to the cluster display. Its icon is Waze's `ic_open_in_new` drawable. The button is optional: if a future Waze drops that drawable or changes
+its button code, `patch.sh` prints a warning and builds without it.
+
+On the cluster the window cannot be touched, so a copy of the button then floats on the centre display and brings
+Waze back. That needs the overlay permission, which a sideloaded app does not get by itself:
+
+```bash
+adb shell appops set com.carlosrpg.waze SYSTEM_ALERT_WINDOW allow
+```
+
+Without it, Waze comes back by opening it from the launcher (or from QuickSettings). The button only moves the
+window: it does not send the car's cluster hand-over signals that QuickSettings sends.
+
+## Updates
+
+A CI release build knows its build number (the `-buildN` of its release tag; `BUILD_NUMBER` for `patch.sh`). Once
+per start, on the centre display, it asks GitHub for this repository's latest release and, when that build is
+newer, offers to download and install it (`Updater.java`): the APK goes to a `PackageInstaller` session and Android
+shows its own confirm screen. `assemble.py` adds `REQUEST_INSTALL_PACKAGES` to the manifest for this. If the car has
+no "install unknown apps" screen for Waze, allow it once over adb:
+
+```bash
+adb shell appops set com.carlosrpg.waze REQUEST_INSTALL_PACKAGES allow
+```
+
+A local build (`BUILD_NUMBER` unset) never asks.
 
 ## How it stays version-independent
 
@@ -113,6 +144,8 @@ sub-text while navigating.
 - `src/com/carlosrpg/wazenotify/NavText.java` — pure text/icon rules (unit-tested by `test/NavTextCheck.java`).
 - `src/com/carlosrpg/wazenotify/NavNotifier.java` — reflection + proxy + notification (version-independent).
 - `src/com/carlosrpg/wazenotify/ClusterLayout.java`, `JconfigBridge.java` — cluster layout; JConfig glue.
+- `src/com/carlosrpg/wazenotify/ClusterButton.java`, `tools/hook_cluster_button.py` — the cluster toggle.
+- `src/com/carlosrpg/wazenotify/Updater.java`, `UpdateTag.java` — update check, download and install.
 - `tools/derive.py` — writes `gen/NavMap.java` per APK.
 - `tools/hook_oncreate.py` — inserts the onCreate call.
 - `jconfig/`, `tools/port_jconfig.py` — JConfig's cluster patch classes; ports them onto this Waze.

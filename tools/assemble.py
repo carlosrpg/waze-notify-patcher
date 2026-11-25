@@ -11,17 +11,19 @@ import sys
 import zipfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # run with python -I, which leaves it out
-from rename_package import rename_manifest, rename_table
+from rename_package import add_permission, rename_manifest, rename_table
 
 
 def main(original, built, notifier_dex, out, package=None):
     with zipfile.ZipFile(built) as b:
         dex = {n: b.read(n) for n in b.namelist() if n.startswith("classes") and n.endswith(".dex")}
     assert dex, "apktool build produced no dex"
-    renamed = {}
     with zipfile.ZipFile(original) as src:
+        # the updater (Updater.java) installs the next release itself
+        manifest = add_permission(src.read("AndroidManifest.xml"), "android.permission.REQUEST_INSTALL_PACKAGES")
+        renamed = {"AndroidManifest.xml": manifest}
         if package:
-            manifest, old, n = rename_manifest(src.read("AndroidManifest.xml"), package)
+            manifest, old, n = rename_manifest(manifest, package)
             renamed = {"AndroidManifest.xml": manifest,
                        "resources.arsc": rename_table(src.read("resources.arsc"), old, package)}
             print(f"application id {old} -> {package} ({n} manifest attributes)")

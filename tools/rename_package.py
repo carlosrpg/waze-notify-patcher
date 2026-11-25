@@ -104,6 +104,39 @@ def rename_manifest(d, new):
     return bytes(out), old, changed
 
 
+def add_permission(d, name):
+    """Binary AndroidManifest.xml with <uses-permission android:name=name/> added (unchanged if already there).
+
+    A copy of an existing single-attribute uses-permission element (its start and end chunks) is inserted after
+    the original, pointing at a new string appended to the pool.
+    """
+    d = bytearray(d)
+    _, h, _ = struct.unpack_from("<HHI", d, 0)
+    pool_at = strings = flags = None
+    for o, t, ch, sz in _chunks(d, h, len(d)):
+        if t == RES_STRING_POOL:
+            pool_at, (strings, flags) = (o, sz), _read_pool(d, o)
+            if name in strings:
+                return bytes(d)
+        elif t == RES_XML_START_ELEMENT and strings[struct.unpack_from("<I", d, o + 20)[0]] == "uses-permission":
+            a_start, _, a_count = struct.unpack_from("<HHH", d, o + 24)
+            a = o + 16 + a_start
+            if a_count != 1 or strings[struct.unpack_from("<I", d, a + 4)[0]] != "name":
+                continue
+            end_type, _, end_sz = struct.unpack_from("<HHI", d, o + sz)   # the element is empty: its end follows
+            assert end_type == 0x103, "uses-permission has children"
+            end = o + sz + end_sz
+            copy = bytearray(d[o:end])
+            strings.append(name)
+            struct.pack_into("<i", copy, a - o + 8, len(strings) - 1)
+            struct.pack_into("<I", copy, a - o + 16, len(strings) - 1)
+            p, psz = pool_at
+            out = d[:p] + _build_pool(strings, flags) + d[p + psz:end] + copy + d[end:]
+            struct.pack_into("<I", out, 4, len(out))
+            return bytes(out)
+    raise AssertionError("no plain uses-permission element to copy")
+
+
 def rename_table(d, old, new):
     """resources.arsc with its (single) package's name moved from old to new."""
     d = bytearray(d)
