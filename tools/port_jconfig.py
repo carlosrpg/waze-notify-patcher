@@ -337,6 +337,18 @@ def compose_hooks(port):
     traced(port, "mid_drive.LandscapeMainContent (MidDriveScreen.kt", insight, insight_ins, "insight card, mid-drive")
     traced(port, "pre_drive.LandscapeMainContent (PreDriveScreen.kt", insight, insight_ins, "insight card, pre-drive")
 
+    # While an alert shows, Waze swaps the ETA drawer for a full-width compact bar; on the cluster keep the drawer
+    # (the centred box) and never show the bar. ClusterLayout decides, from whether a Waze window is on the cluster.
+    vis = re.compile(r"^(\s*)invoke-static/range \{v(\d+) \.\. v\d+\}, Landroidx/compose/animation/AnimatedVisibilityKt;->AnimatedVisibility\(Z", re.M)
+    def vis_ins(fn):
+        def ins(c):
+            assert int(c.group(2)) <= 15, "AnimatedVisibility flag register too high for a short invoke"
+            return (f"{c.group(1)}invoke-static {{v{c.group(2)}}}, Lcom/carlosrpg/wazenotify/ClusterLayout;->{fn}(Z)Z\n"
+                    f"{c.group(1)}move-result v{c.group(2)}\n" + c.group(0))
+        return ins
+    traced(port, "mid_drive.LandscapeMainContent (MidDriveScreen.kt", vis, vis_ins("etaDrawerVisible"), "eta drawer stays during alerts")
+    traced(port, "mid_drive.AnimatedCompactEtaBar (MidDriveScreen.kt", vis, vis_ins("compactEtaVisible"), "no compact eta bar on cluster")
+
 
 def map_hooks(port):
     d = port.dst
@@ -383,6 +395,15 @@ def map_hooks(port):
             ins = f"{ind}invoke-static {{p1, p2, {r}}}, {P}->{fn}(Landroid/graphics/Rect;Landroid/graphics/Rect;F)F\n{ind}move-result {r}\n"
             out = out[:m.start()] + ins + out[m.start():]
             n += 1
+        # Height and offsetY: on the cluster always the whole window. Waze otherwise sometimes leaves room for the
+        # ETA drawer and sometimes not, and car.y (a fraction of this viewport) then lands at two different heights.
+        for setter, fn in (("setHeight", "viewportHeight"), ("setOffsetY", "viewportOffsetY")):
+            m = re.search(r"^(\s*)invoke-virtual \{\w+, (\w+)\}, Lcom/waze/jni/protos/map/RelativeViewPort\$Builder;->" + setter + r"\(F\)", out, re.M)
+            assert m, f"viewport {setter} not found"
+            ind, r = m.group(1), m.group(2)
+            assert r.startswith("p") or reg_num(r) <= 15, "register too high for a short invoke"
+            ins = f"{ind}invoke-static {{{r}}}, Lcom/carlosrpg/wazenotify/ClusterLayout;->{fn}(F)F\n{ind}move-result {r}\n"
+            out = out[:m.start()] + ins + out[m.start():]
         return out
     port.edit_method(vp, r"^public final \w+\(Landroid/graphics/Rect;Landroid/graphics/Rect;\)Lcom/waze/jni/protos/map/RelativeViewPort;$", viewport, "viewport width + offset")
 

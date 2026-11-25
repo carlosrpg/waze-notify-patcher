@@ -66,7 +66,8 @@ cluster): it shrinks Waze's turn box and moves it to the cluster ellipse's north
 keeps the car marker between the speedometer and the ETA (re-applied every 2 s, with its own height while an alert
 shows the full-width ETA bar). Tune it without rebuilding in
 `/sdcard/Android/data/com.carlosrpg.waze/files/cluster.properties`: `nav.x`, `nav.top`, `nav.scale`, `car.x`,
-`car.y`, `car.y.alert` (fractions of the window), then send Waze to the cluster again.
+`car.y`, `car.y.alert`, `speed.dx` (speedometer shift to the right; all fractions of the window), `speed.scale`, then send Waze to
+the cluster again.
 
 `ClusterButton.java` (a "send to cluster" button on the main screen) is kept in `src/` but not built.
 
