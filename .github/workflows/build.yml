@@ -50,6 +50,7 @@ jobs:
       - name: Download the latest Waze from APKMirror
         id: waze
         run: |
+          set -o pipefail   # a failed download stops here, not in the next step
           python -I tools/apkmirror.py "$RUNNER_TEMP/in" | tee "$RUNNER_TEMP/apkmirror.log"
           echo "version=$(tail -1 "$RUNNER_TEMP/apkmirror.log")" >> "$GITHUB_OUTPUT"
 
