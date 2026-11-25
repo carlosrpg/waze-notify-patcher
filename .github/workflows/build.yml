@@ -78,6 +78,8 @@ jobs:
       - name: Patch
         env:
           VERSION: ${{ steps.waze.outputs.version }}
+          # the release tag's build number, which the app's update check compares; 0 = never ask (pull requests)
+          BUILD_NUMBER: ${{ env.RELEASE == 'true' && github.run_number || 0 }}
         run: |
           OUT="$RUNNER_TEMP/out/waze-$VERSION-carlosrpg.apk"
           mkdir -p "$(dirname "$OUT")"

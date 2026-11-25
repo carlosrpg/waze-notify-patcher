@@ -46,7 +46,8 @@ test -f "$APKTOOL" || { echo "apktool jar not found: $APKTOOL (set APKTOOL)"; ex
 
 echo "== 1. self-check the text rules (version-independent)"
 rm -rf "$WORK"; mkdir -p "$WORK/test" "$WORK/classes" "$WORK/dex" "$HERE/gen"
-javac --release 8 -encoding UTF-8 -d "$(w "$WORK/test")" "$(w "$HERE/src/com/carlosrpg/wazenotify/NavText.java")" "$(w "$HERE/test/NavTextCheck.java")"
+javac --release 8 -encoding UTF-8 -d "$(w "$WORK/test")" "$(w "$HERE/src/com/carlosrpg/wazenotify/NavText.java")" \
+  "$(w "$HERE/src/com/carlosrpg/wazenotify/UpdateTag.java")" "$(w "$HERE/test/NavTextCheck.java")"
 java -cp "$(w "$WORK/test")" com.carlosrpg.wazenotify.NavTextCheck
 
 echo "== 2. decode the apk"
@@ -75,19 +76,25 @@ echo "== 4. derive Waze's obfuscated names for this apk -> NavMap.java"
 "$PY" -I "$HERE/tools/derive.py" "$(w "$WORK/base")" "$(w "$HERE/gen/NavMap.java")"
 
 echo "== 5. compile the notifier (reflection-based; compiles against android.jar only) and dex it"
-# ClusterButton.java (a "send to cluster" button on the main screen) is kept but not built.
-javac --release 8 -encoding UTF-8 -nowarn -cp "$(w "$ANDROID_JAR")" -d "$(w "$WORK/classes")" \
-  "$(w "$HERE/src/com/carlosrpg/wazenotify/NavText.java")" \
-  "$(w "$HERE/src/com/carlosrpg/wazenotify/NavNotifier.java")" \
-  "$(w "$HERE/src/com/carlosrpg/wazenotify/ClusterLayout.java")" \
-  "$(w "$HERE/src/com/carlosrpg/wazenotify/JconfigBridge.java")" \
-  "$(w "$HERE/gen/NavMap.java")"
+# BUILD_NUMBER: the CI run number a release is tagged with; 0 (a local build) never asks for updates.
+echo "package com.carlosrpg.wazenotify; final class BuildInfo { static final int BUILD = $((${BUILD_NUMBER:-0})); }" > "$HERE/gen/BuildInfo.java"
+SRC=(); for f in "$HERE"/src/com/carlosrpg/wazenotify/*.java "$HERE"/gen/*.java; do SRC+=("$(w "$f")"); done
+javac --release 8 -encoding UTF-8 -nowarn -cp "$(w "$ANDROID_JAR")" -d "$(w "$WORK/classes")" "${SRC[@]}"
 CLS=(); while IFS= read -r c; do CLS+=("$(w "$c")"); done < <(find "$WORK/classes" -name '*.class')
 MIN=$("$BT/aapt2$EXE" dump badging "$(w "$IN")" 2>/dev/null | sed -nE "s/.*sdkVersion:'([0-9]+)'.*/\1/p" | head -1)
 "$BT/d8$BAT" --release --min-api "${MIN:-29}" --lib "$(w "$ANDROID_JAR")" --output "$(w "$WORK/dex")" "${CLS[@]}"
 
 echo "== 6. hook the Application's onCreate (first instruction)"
 "$PY" -I "$HERE/tools/hook_oncreate.py" "$(w "$APP_SMALI")"
+
+echo "== 6c. add the cluster toggle to Waze's map-button column"
+# Optional: a Waze that changed its button code or dropped the icon is still built, without the button
+# (::warning:: shows on the CI run).
+if ! "$BT/aapt2$EXE" dump resources "$(w "$IN")" 2>/dev/null | grep -q "drawable/ic_open_in_new"; then
+  echo "::warning::no cluster button: this Waze has no ic_open_in_new drawable (ClusterButton.ICON)"
+elif ! "$PY" -I "$HERE/tools/hook_cluster_button.py" "$(w "$WORK/base")"; then
+  echo "::warning::no cluster button: Waze's sound button code changed (tools/hook_cluster_button.py)"
+fi
 
 echo "== 7. rebuild and assemble (resources/libs/manifest from the original, dex from the rebuild + notifier)"
 rm -f "$WORK/apktool.apk" "$WORK/unsigned.apk" "$WORK/aligned.apk"
@@ -108,6 +115,8 @@ rm -f "$OUT.idsig"
 echo "== 9. verify"
 "$BT/apksigner$BAT" verify "$(w "$OUT")" >/dev/null && echo "signature ok"
 "$PY" -I "$HERE/tools/verify.py" "$(w "$OUT")" "$(w "$IN")" $PACKAGE
+"$BT/aapt2$EXE" dump permissions "$(w "$OUT")" | grep -q "REQUEST_INSTALL_PACKAGES" \
+  || { echo "FAIL the install permission is not in the manifest"; exit 1; }
 if [ -n "$PACKAGE" ]; then
   "$BT/aapt2$EXE" dump badging "$(w "$OUT")" 2>/dev/null | grep -q "^package: name='$PACKAGE'" \
     || { echo "FAIL application id is not $PACKAGE"; exit 1; }

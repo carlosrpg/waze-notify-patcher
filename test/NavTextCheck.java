@@ -39,6 +39,12 @@ public final class NavTextCheck {
         eq(NavText.join("200 m", "Av. Paulista"), "200 m · Av. Paulista");
         eq(NavText.join("", "12 min"), "12 min");
         eq(NavText.join("", ""), "");
+
+        eq(UpdateTag.build("waze-5.28.5.0-build6"), 6);
+        eq(UpdateTag.build("waze-5.29.0.0-build12"), 12);
+        eq(UpdateTag.build("waze-5.28.5.0"), 0);
+        eq(UpdateTag.build("waze-5.28.5.0-buildx"), 0);
+        eq(UpdateTag.build(null), 0);
         System.out.println("NavTextCheck: all checks passed");
     }
 }
