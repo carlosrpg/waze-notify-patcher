@@ -1,12 +1,10 @@
 # Download the latest stable Waze from APKMirror, patch it (tools/apkmirror.py + patch.sh) and publish the APK.
 # Pull requests: build and keep the APK as a workflow artifact. main (push or manual run): also a GitHub release.
 #
-# Repository secrets:
-#   JCONFIG_APK_URL   where to fetch the JConfig build whose cluster patches are ported (required on main;
-#                     a pull request without it builds the notification-only variant)
-#   KEYSTORE_B64      base64 of the signing keystore (required on main, so every release updates over the last;
-#                     a pull request without it signs with a throwaway key)
-#   KEYSTORE_PASSWORD its store/key password (default wazepatch); alias wazepatch
+# The JConfig cluster patches are ported from jconfig/ in this repository.
+# Repository secrets (the same signing key as the other car apps; required on main so every release installs over
+# the last; a pull request without them, e.g. from a fork, signs with a throwaway key):
+#   RELEASE_KEYSTORE_BASE64, RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS, RELEASE_KEY_PASSWORD
 name: build
 
 on:
@@ -55,28 +53,25 @@ jobs:
           python -I tools/apkmirror.py "$RUNNER_TEMP/in" | tee "$RUNNER_TEMP/apkmirror.log"
           echo "version=$(tail -1 "$RUNNER_TEMP/apkmirror.log")" >> "$GITHUB_OUTPUT"
 
-      - name: JConfig build and signing key
+      - name: Signing key
         env:
-          JCONFIG_APK_URL: ${{ secrets.JCONFIG_APK_URL }}
-          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
         run: |
-          if [ -n "$JCONFIG_APK_URL" ]; then
-            curl -fsSL -o "$RUNNER_TEMP/jconfig.apk" "$JCONFIG_APK_URL"
-            echo "JCONFIG=$RUNNER_TEMP/jconfig.apk" >> "$GITHUB_ENV"
+          if [ -n "$RELEASE_KEYSTORE_BASE64" ]; then
+            printf '%s' "$RELEASE_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+            {
+              echo "KEYSTORE=$RUNNER_TEMP/release.keystore"
+              echo "KS_PASS=$RELEASE_STORE_PASSWORD"
+              echo "KS_ALIAS=$RELEASE_KEY_ALIAS"
+              echo "KEY_PASS=$RELEASE_KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
           elif [ "$RELEASE" = true ]; then
-            echo "::error::JCONFIG_APK_URL secret is not set"; exit 1
+            echo "::error::RELEASE_KEYSTORE_BASE64 secret is not set"; exit 1
           else
-            echo "::warning::no JCONFIG_APK_URL: building the notification-only variant"
-          fi
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
-            echo "KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
-            echo "::add-mask::${KEYSTORE_PASSWORD:-wazepatch}"
-            echo "KS_PASS=${KEYSTORE_PASSWORD:-wazepatch}" >> "$GITHUB_ENV"
-          elif [ "$RELEASE" = true ]; then
-            echo "::error::KEYSTORE_B64 secret is not set"; exit 1
-          else
+            echo "::warning::no signing secrets: signing with a throwaway key"
             echo "KEYSTORE=$RUNNER_TEMP/throwaway.keystore" >> "$GITHUB_ENV"   # patch.sh creates it
           fi
 

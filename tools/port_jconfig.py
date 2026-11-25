@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
-"""Port the JConfig build's cluster patches (from its decoded APK) onto a decoded newer Waze.
+"""Port the JConfig build's cluster patches onto a decoded newer Waze.
 
-  port_jconfig.py <jconfig-decoded-dir> <target-decoded-dir>
+  port_jconfig.py <jconfig-dir> <target-decoded-dir>
+
+<jconfig-dir> is a decoded JConfig build, or the repository's jconfig/ (smali/ with only JConfig's own classes and
+the Alerter data class of the Waze it was built on, which is all this reads).
 
 1. Copies JConfig's own classes (com/waze/patches/*, com/vadimbrk/*) into a new smali dir of the target, remapping
    the few obfuscated Waze names they use (the "Alerter" data class and its getters, found by field name).

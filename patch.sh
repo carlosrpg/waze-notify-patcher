@@ -5,13 +5,16 @@
 # hardcoding them. Takes a single universal APK (one .apk with lib/ + res/ + all dex; tools/merge_splits.py makes
 # one from a bundle). Runs in Git Bash on Windows and in bash on Linux (CI).
 #
-# Usage:  [JCONFIG=<jconfig-build.apk>] [PACKAGE=<app id>] bash patch.sh <input.apk> [output.apk]
-#   JCONFIG  ports that build's cluster patches (phone UI on Android Automotive, cluster ETA box, alerts, car
-#            position) onto <input.apk> first (tools/port_jconfig.py). Without it: notification and turn box only.
+# Usage:  [JCONFIG=<dir|apk>] [PACKAGE=<app id>] bash patch.sh <input.apk> [output.apk]
+#   JCONFIG  the JConfig cluster patches to port onto <input.apk> first (tools/port_jconfig.py): phone UI on
+#            Android Automotive, cluster ETA box, alerts, car position. Default: the classes kept in jconfig/
+#            (from JConfig's 5.23.0.2 build); a JConfig build's .apk also works. JCONFIG= builds without them
+#            (notification and turn box only).
 #   PACKAGE  application id of the result (default com.carlosrpg.waze, so it installs next to a normal Waze);
 #            PACKAGE= keeps com.waze.
 # Tools: ANDROID_HOME (else %LOCALAPPDATA%/Android/Sdk), JAVA_HOME (JDK 17+), APKTOOL (apktool 3.x jar).
-# Signing: KEYSTORE / KS_PASS / KS_ALIAS (default waze-patch.keystore next to this script, created on first run).
+# Signing: KEYSTORE, KS_PASS, KS_ALIAS, KEY_PASS; unset ones come from signing.properties next to this script
+# (gitignored: storeFile, storePassword, keyAlias, keyPassword), else waze-patch.keystore (created on first run).
 # Output: <output.apk> (default: <input>-notify.apk next to the input).
 set -euo pipefail
 
@@ -20,9 +23,13 @@ SDK="${ANDROID_HOME:-${LOCALAPPDATA:-}/Android/Sdk}"
 BT="${BUILD_TOOLS:-$(ls -d "$SDK"/build-tools/* | sort -V | tail -1)}"
 ANDROID_JAR="${ANDROID_JAR:-$(ls -d "$SDK"/platforms/android-*/android.jar | sort -V | tail -1)}"
 APKTOOL="${APKTOOL:-/c/repos/jconfig-rea2/tools/apktool_3.0.3.jar}"
-KEYSTORE="${KEYSTORE:-$HERE/waze-patch.keystore}"
-KS_PASS="${KS_PASS:-wazepatch}"
-KS_ALIAS="${KS_ALIAS:-wazepatch}"
+prop() { [ -f "$HERE/signing.properties" ] && sed -n "s/^$1=//p" "$HERE/signing.properties" | tr -d '\r' || true; }
+SF=$(prop storeFile)
+KEYSTORE="${KEYSTORE:-${SF:+$HERE/$SF}}"; KEYSTORE="${KEYSTORE:-$HERE/waze-patch.keystore}"
+KS_PASS="${KS_PASS:-$(prop storePassword)}"; KS_PASS="${KS_PASS:-wazepatch}"
+KS_ALIAS="${KS_ALIAS:-$(prop keyAlias)}"; KS_ALIAS="${KS_ALIAS:-wazepatch}"
+KEY_PASS="${KEY_PASS:-$(prop keyPassword)}"; KEY_PASS="${KEY_PASS:-$KS_PASS}"
+JCONFIG="${JCONFIG-$HERE/jconfig}"
 PACKAGE="${PACKAGE-com.carlosrpg.waze}"
 PY="${PYTHON:-python}"
 
@@ -48,8 +55,11 @@ java -jar "$(w "$APKTOOL")" d -r -f -o "$(w "$WORK/base")" "$(w "$IN")"
 if [ -n "${JCONFIG:-}" ]; then
   echo "== 2b. port the JConfig build's patches onto this Waze"
   JC=$(cd "$(dirname "$JCONFIG")" && pwd)/$(basename "$JCONFIG")
-  JC_DIR="$HERE/work/jconfig-src/$(basename "${JC%.apk}")"
-  [ -d "$JC_DIR" ] || java -jar "$(w "$APKTOOL")" d -r -f -o "$(w "$JC_DIR")" "$(w "$JC")"
+  JC_DIR="$JC"
+  if [ -f "$JC" ]; then
+    JC_DIR="$HERE/work/jconfig-src/$(basename "${JC%.apk}")"
+    [ -d "$JC_DIR" ] || java -jar "$(w "$APKTOOL")" d -r -f -o "$(w "$JC_DIR")" "$(w "$JC")"
+  fi
   "$PY" -I "$HERE/tools/port_jconfig.py" "$(w "$JC_DIR")" "$(w "$WORK/base")"
 fi
 
@@ -91,7 +101,7 @@ if [ ! -f "$KEYSTORE" ]; then
   keytool -genkeypair -keystore "$(w "$KEYSTORE")" -storepass "$KS_PASS" -keypass "$KS_PASS" -alias "$KS_ALIAS" \
     -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Waze notify patch (personal sideload)"
 fi
-"$BT/apksigner$BAT" sign --ks "$(w "$KEYSTORE")" --ks-pass "pass:$KS_PASS" --ks-key-alias "$KS_ALIAS" \
+"$BT/apksigner$BAT" sign --ks "$(w "$KEYSTORE")" --ks-pass "pass:$KS_PASS" --ks-key-alias "$KS_ALIAS" --key-pass "pass:$KEY_PASS" \
   --in "$(w "$WORK/aligned.apk")" --out "$(w "$OUT")"
 rm -f "$OUT.idsig"
 

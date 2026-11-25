@@ -16,22 +16,24 @@ the notifier never has to be compiled against Waze's version-specific types.
 Git Bash on Windows, or bash on Linux:
 
 ```bash
-JCONFIG=waze-jconfig.apk bash patch.sh waze.apk [out.apk]   # the car build
-bash patch.sh waze.apk [out.apk]                            # notification + turn box only
+bash patch.sh waze.apk [out.apk]             # the car build
+JCONFIG= bash patch.sh waze.apk [out.apk]    # notification + turn box only
 ```
 
 - The input is a single **universal** APK (one file with `lib/`, `res/` and all dex). `tools/merge_splits.py`
   makes one from a bundle; `tools/apkmirror.py <dir>` downloads the latest stable Waze from APKMirror (the arm64
   bundle that runs on Android 11) and merges it.
-- `JCONFIG` names a JConfig build of Waze. `tools/port_jconfig.py` ports its cluster patches onto the input: the
-  phone UI on Android Automotive (stock Waze hangs on "Signing in..." there), the cluster ETA box, alert overlay
-  and car position. It works by stable names (JNI methods, Compose trace strings, structure), so the JConfig build
-  can be older than the Waze being patched.
+- `tools/port_jconfig.py` ports JConfig's cluster patches onto the input: the phone UI on Android Automotive
+  (stock Waze hangs on "Signing in..." there), the cluster ETA box, alert overlay and car position. Their classes
+  are kept in `jconfig/` (from JConfig's build of Waze 5.23.0.2, with that Waze's Alerter data class for the getter
+  remapping). The hooks are found by stable names (JNI methods, Compose trace strings, structure), so the newer
+  Waze needs no per-version edits. `JCONFIG=<dir or JConfig .apk>` uses another JConfig build.
 - `PACKAGE` sets the application id, default `com.carlosrpg.waze`, so the result installs next to a normal Waze
   (`PACKAGE=` keeps `com.waze`). Class names stay `com.waze.*`; see `tools/rename_package.py`.
-- Output: `<input>-notify.apk` next to the input by default, signed with `waze-patch.keystore` (created on first
-  run; keep it: later builds must use the same key to install over each other). Set `KEYSTORE`/`KS_PASS` for
-  another key. Install it on the car with a file manager, then grant notification access to QuickSettings over
+- Output: `<input>-notify.apk` next to the input by default. Signed with the key named in `signing.properties`
+  (gitignored: `storeFile`, `storePassword`, `keyAlias`, `keyPassword`; the same key as the other car apps), or
+  `KEYSTORE`/`KS_PASS`/`KS_ALIAS`/`KEY_PASS`; without either, `waze-patch.keystore` (created on first run). Keep
+  the key: later builds must use it to install over each other. Install it on the car with a file manager, then grant notification access to QuickSettings over
   adb (see the QuickSettings README).
 
 Requirements: JDK 17+, the Android SDK (build-tools and a platform; `ANDROID_HOME`), apktool 3.x (`APKTOOL`, the
@@ -40,10 +42,9 @@ jar), Python 3.
 ### CI
 
 `.github/workflows/build.yml` downloads the latest Waze from APKMirror, patches it and uploads the APK: as a
-workflow artifact on pull requests, and as a GitHub release on `main`. Repository secrets: `JCONFIG_APK_URL` (where
-to fetch the JConfig build), `KEYSTORE_B64` (base64 of the signing keystore) and `KEYSTORE_PASSWORD`. Both the URL
-and the key are required on `main`; a pull request without them builds the notification-only variant with a
-throwaway key.
+workflow artifact on pull requests, and as a GitHub release on `main`. Signing comes from the repository secrets
+`RELEASE_KEYSTORE_BASE64`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS` and `RELEASE_KEY_PASSWORD` (required on
+`main`; a pull request without them signs with a throwaway key).
 
 ## What it changes
 
@@ -51,7 +52,7 @@ throwaway key.
    added after the last `classesN.dex`.
 2. Inserts one instruction at the top of the app's `Application.onCreate` (found from the manifest):
    `invoke-static … NavNotifier->install(Application)`.
-3. With `JCONFIG`: the ported JConfig classes and their hooks in Waze's code.
+3. The ported JConfig classes and their hooks in Waze's code (unless `JCONFIG=`).
 4. The application id (manifest package, provider authorities, Waze's own permissions, resource table package).
 5. Re-signs. Resources and native libs are copied byte-for-byte from the original APK (only the dex are taken
    from the apktool rebuild; apktool corrupts resources by case-collision on Windows).
@@ -113,11 +114,12 @@ sub-text while navigating.
 - `src/com/carlosrpg/wazenotify/ClusterLayout.java`, `JconfigBridge.java` — cluster layout; JConfig glue.
 - `tools/derive.py` — writes `gen/NavMap.java` per APK.
 - `tools/hook_oncreate.py` — inserts the onCreate call.
-- `tools/port_jconfig.py` — ports a JConfig build's patches onto this Waze.
+- `jconfig/`, `tools/port_jconfig.py` — JConfig's cluster patch classes; ports them onto this Waze.
 - `tools/rename_package.py` — moves the application id.
 - `tools/assemble.py`, `tools/verify.py` — APK assembly and checks.
 - `tools/apkmirror.py`, `tools/merge_splits.py` — download the latest Waze; bundle to one APK.
 - `patch.sh` — the whole process.
 - `.github/workflows/build.yml` — CI build and releases.
 
-Not in the repo (see `.gitignore`): APKs, the signing key, the `work/` build tree and the generated `gen/`.
+Not in the repo (see `.gitignore`): APKs, the signing key and `signing.properties`, the `work/` build tree and the
+generated `gen/`.
