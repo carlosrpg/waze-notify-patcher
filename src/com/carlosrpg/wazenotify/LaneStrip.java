@@ -1,6 +1,6 @@
 package com.carlosrpg.wazenotify;
 
-import android.content.Context;
+import android.graphics.RectF;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -12,7 +12,7 @@ import java.util.List;
 
 /**
  * Waze's lane guidance as a picture for the notification: one cell per lane, left to right, each with its arrows
- * (the lanes to take in Waze's selected colour, the others in its passive colour) and Waze's thin separators.
+ * (the lanes to take solid on a soft highlight, the others faint) and faint separators.
  *
  * The lanes come from the turn-guidance listener's lane callback (NavMap.TG_M_LANES): an obfuscated holder whose one
  * List field holds Waze's NavigationLane protobufs, already in left-to-right order. Protobuf classes keep their real
@@ -58,48 +58,65 @@ final class LaneStrip {
         return new Lanes(angles, selected);
     }
 
-    static Bitmap draw(Context c, Lanes lanes) {
+    /**
+     * White on transparent, for dark surfaces (the drawer's glass, the car's notification shade): arrows to take in
+     * solid white on a soft highlight, the others faint. Each faint pass goes through a layer so overlapping strokes
+     * of one lane don't stack into brighter patches.
+     */
+    static Bitmap draw(Lanes lanes) {
         int n = lanes.angles.length;
         Bitmap bmp = Bitmap.createBitmap(n * CELL, CELL, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bmp);
-        int on = color(c, "LanesSelectedColor", Color.WHITE);
-        int off = color(c, "LanesPassiveColor", Color.GRAY);
         Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
+        line.setColor(Color.WHITE);
         line.setStyle(Paint.Style.STROKE);
         line.setStrokeCap(Paint.Cap.ROUND);
-        line.setStrokeWidth(CELL * 0.08f);
-        Paint head = new Paint(Paint.ANTI_ALIAS_FLAG);
-        head.setStyle(Paint.Style.FILL);
-        Paint sep = new Paint();
-        sep.setColor(off);
-        sep.setStrokeWidth(2f);
+        line.setStrokeJoin(Paint.Join.ROUND);
+        line.setStrokeWidth(CELL * 0.09f);
+        Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        fill.setColor(0x24FFFFFF);
+        Paint sep = new Paint(Paint.ANTI_ALIAS_FLAG);
+        sep.setColor(0x2EFFFFFF);
+        sep.setStrokeWidth(CELL * 0.03f);
+        sep.setStrokeCap(Paint.Cap.ROUND);
         for (int i = 0; i < n; i++) {
-            float cx = i * CELL + CELL / 2f;
-            if (i > 0) canvas.drawLine(i * CELL, CELL * 0.72f, i * CELL, CELL * 0.94f, sep);
+            float left = i * CELL, cx = left + CELL / 2f;
+            boolean take = anySelected(lanes.selected[i]);
+            if (take && (i == 0 || !anySelected(lanes.selected[i - 1]))) {   // one pill per run of lanes to take
+                int end = i;
+                while (end + 1 < n && anySelected(lanes.selected[end + 1])) end++;
+                canvas.drawRoundRect(new RectF(left + 5, 4, (end + 1) * CELL - 5, CELL - 4), CELL * 0.2f, CELL * 0.2f, fill);
+            } else if (!take && i > 0 && !anySelected(lanes.selected[i - 1])) {
+                canvas.drawLine(left, CELL * 0.3f, left, CELL * 0.7f, sep);
+            }
             for (int pass = 0; pass < 2; pass++) {   // the lanes to take are drawn last, on top
+                if (pass == 0) canvas.saveLayerAlpha(left, 0, left + CELL, CELL, 0x5C);
                 for (int j = 0; j < lanes.angles[i].length; j++) {
-                    if (lanes.selected[i][j] != (pass == 1)) continue;
-                    line.setColor(pass == 1 ? on : off);
-                    head.setColor(pass == 1 ? on : off);
-                    arrow(canvas, cx, lanes.angles[i][j], line, head);
+                    if (lanes.selected[i][j] == (pass == 1)) arrow(canvas, cx, lanes.angles[i][j], line);
                 }
+                if (pass == 0) canvas.restore();
             }
         }
         return bmp;
     }
 
+    private static boolean anySelected(boolean[] s) {
+        for (boolean b : s) if (b) return true;
+        return false;
+    }
+
     /** One arrow, the way Waze's lane drawable shapes it: up from the bottom, then bent towards its angle. */
-    private static void arrow(Canvas canvas, float cx, int angle, Paint line, Paint head) {
-        float cy = CELL * 0.5f, r = CELL * 0.36f, bottom = CELL * 0.92f;
+    private static void arrow(Canvas canvas, float cx, int angle, Paint line) {
+        float cy = CELL * 0.55f, r = CELL * 0.27f, bottom = CELL * 0.84f;
         Path p = new Path();
         float endX, endY, dx, dy;
         if (Math.abs(angle) == 180) {   // U-turn: up, over and back down (to the left for -180)
-            float side = angle < 0 ? -1f : 1f, x1 = cx - side * CELL * 0.14f, x2 = cx + side * CELL * 0.18f;
+            float side = angle < 0 ? -1f : 1f, x1 = cx - side * CELL * 0.12f, x2 = cx + side * CELL * 0.14f;
             p.moveTo(x1, bottom);
-            p.lineTo(x1, cy);
-            p.cubicTo(x1, cy - CELL * 0.4f, x2, cy - CELL * 0.4f, x2, cy);
+            p.lineTo(x1, cy - CELL * 0.05f);
+            p.cubicTo(x1, cy - CELL * 0.36f, x2, cy - CELL * 0.36f, x2, cy - CELL * 0.05f);
             endX = x2;
-            endY = cy + CELL * 0.12f;
+            endY = cy + CELL * 0.06f;
             p.lineTo(endX, endY);
             dx = 0f;
             dy = 1f;
@@ -114,18 +131,11 @@ final class LaneStrip {
             endY = cy + dy * r;
             p.lineTo(endX, endY);
         }
+        // arrowhead: an open chevron in the same rounded stroke, its tip just past the line's end
+        float h = CELL * 0.13f, w = CELL * 0.12f, tipX = endX + dx * CELL * 0.03f, tipY = endY + dy * CELL * 0.03f;
+        p.moveTo(tipX - dx * h - dy * w, tipY - dy * h + dx * w);
+        p.lineTo(tipX, tipY);
+        p.lineTo(tipX - dx * h + dy * w, tipY - dy * h - dx * w);
         canvas.drawPath(p, line);
-        float h = CELL * 0.16f, w = CELL * 0.12f;   // arrowhead: tip ahead of the line's end, base across it
-        Path tri = new Path();
-        tri.moveTo(endX + dx * h, endY + dy * h);
-        tri.lineTo(endX - dy * w, endY + dx * w);
-        tri.lineTo(endX + dy * w, endY - dx * w);
-        tri.close();
-        canvas.drawPath(tri, head);
-    }
-
-    private static int color(Context c, String name, int fallback) {
-        int id = c.getResources().getIdentifier(name, "color", c.getPackageName());
-        try { return id != 0 ? c.getColor(id) : fallback; } catch (Throwable t) { return fallback; }
     }
 }

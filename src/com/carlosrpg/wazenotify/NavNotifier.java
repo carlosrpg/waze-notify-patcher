@@ -322,7 +322,7 @@ public final class NavNotifier {
         LaneStrip.Lanes l = lanes;
         if (l != lanesDrawn) {
             lanesDrawn = l;
-            lanesBmp = l == null ? null : LaneStrip.draw(app, l);
+            lanesBmp = l == null ? null : LaneStrip.draw(l);
         }
         return lanesBmp;
     }

@@ -5,8 +5,8 @@ QuickSettings drawer) can read directions on the car. Stock Waze, run as a norma
 posts no directions in a notification — only "Waze — Running. Tap to open." This patch posts, during navigation:
 the distance to the next turn as the title, the road as the text, the ETA and remaining distance as the sub-text,
 Waze's own manoeuvre arrow as the large icon (with the roundabout exit number on it, as in Waze's turn box) and,
-when Waze shows lane guidance, the lanes as the big picture (`EXTRA_PICTURE`: one cell per lane, the lanes to take
-in Waze's selected colour). Category `navigation`, ongoing, ≤ 1 update/second.
+when Waze shows lane guidance, the lanes as the big picture (`EXTRA_PICTURE`: one cell per lane, white on
+transparent for dark surfaces: the lanes to take solid on a soft highlight, the others faint). Category `navigation`, ongoing, ≤ 1 update/second.
 
 When there is no road name the text is the manoeuvre in **Waze's in-app language**: the notifier asks Waze's own
 translator (`NativeManager.langGetIntNTV`) for its `DisplayStrings` prompt (`CUSTOM_PROMPT_TURN_LEFT`,
