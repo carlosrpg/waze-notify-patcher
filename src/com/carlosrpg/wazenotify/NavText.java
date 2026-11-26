@@ -30,7 +30,32 @@ final class NavText {
         }
     }
 
-    /** "TURN_LEFT" -> "Turn left"; used only when Waze gives no street name. */
+    private static final String[] ORDINALS = {"FIRST", "SECOND", "THIRD", "FOURTH", "FIFTH", "SIXTH", "SEVENTH"};
+
+    /**
+     * Name (without "DS_") of Waze's display string for a manoeuvre, shown when Waze gives no street name. NavNotifier
+     * has Waze translate it into the app's language. The names are Waze's own constants (kept through obfuscation).
+     */
+    static String promptKey(String instruction, int exit) {
+        if (instruction == null) return null;
+        if (instruction.startsWith("ROUNDABOUT") && !instruction.endsWith("_U")) {
+            return exit >= 1 && exit <= ORDINALS.length ? "CUSTOM_PROMPT_" + ORDINALS[exit - 1] : "CUSTOM_PROMPT_ROUNDABOUT";
+        }
+        switch (instruction) {
+            case "TURN_LEFT": case "SHARP_LEFT": case "PREPARE_TURN_LEFT": return "CUSTOM_PROMPT_TURN_LEFT";
+            case "TURN_RIGHT": case "SHARP_RIGHT": case "PREPARE_TURN_RIGHT": return "CUSTOM_PROMPT_TURN_RIGHT";
+            case "KEEP_LEFT": case "SLIGHT_LEFT": return "CUSTOM_PROMPT_KEEP_LEFT";
+            case "KEEP_RIGHT": case "SLIGHT_RIGHT": return "CUSTOM_PROMPT_KEEP_RIGHT";
+            case "EXIT_LEFT": case "PREPARE_EXIT_LEFT": return "CUSTOM_PROMPT_EXIT_LEFT";
+            case "EXIT_RIGHT": case "PREPARE_EXIT_RIGHT": return "CUSTOM_PROMPT_EXIT_RIGHT";
+            case "CONTINUE_STRAIGHT": return "CUSTOM_PROMPT_STRAIGHT";
+            case "U_TURN": case "ROUNDABOUT_U": case "ROUNDABOUT_EXIT_U": return "CUSTOM_PROMPT_U_TURN";
+            case "APPROACHING_DESTINATION": return "CUSTOM_PROMPT_ARRIVE";
+            default: return null;
+        }
+    }
+
+    /** "TURN_LEFT" -> "Turn left"; the last resort when Waze gives no street and no translation. */
     static String describe(String instruction) {
         if (instruction == null || instruction.isEmpty() || instruction.equals("NAV_INSTR_NONE")) return "";
         String s = instruction.replace('_', ' ').toLowerCase(java.util.Locale.ROOT);
@@ -46,12 +71,17 @@ final class NavText {
         return String.format(java.util.Locale.ROOT, "%.1f km", meters / 1000.0);
     }
 
-    /** The line under the distance: the street to turn onto, with the roundabout exit in front when there is one. */
-    static String instruction(String instruction, int exit, String street) {
+    /** The line under the distance: the street to turn onto, else Waze's translated words for the manoeuvre
+     *  ({@code translated}, from {@link #promptKey}). The roundabout exit number is drawn on the arrow, as Waze does. */
+    static String instruction(String instruction, String street, String translated) {
         String s = street == null ? "" : street.trim();
-        boolean roundabout = instruction != null && instruction.startsWith("ROUNDABOUT");
-        if (roundabout && exit > 0) return s.isEmpty() ? "Exit " + exit : "Exit " + exit + " · " + s;
-        return s.isEmpty() ? describe(instruction) : s;
+        if (!s.isEmpty()) return s;
+        return translated != null && !translated.trim().isEmpty() ? translated.trim() : describe(instruction);
+    }
+
+    /** The number drawn on a roundabout arrow, or null. */
+    static String exitLabel(String instruction, int exit) {
+        return instruction != null && instruction.startsWith("ROUNDABOUT") && exit > 0 ? Integer.toString(exit) : null;
     }
 
     /** ETA to the destination from raw minutes, e.g. "12 min" or "1 h 20 min". Formatted here rather than from

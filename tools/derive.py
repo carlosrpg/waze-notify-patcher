@@ -22,7 +22,9 @@ That manager has no static getInstance; it comes from Waze's DI lookup (TG_LOOKU
 found as the static (Class)Object call that follows a const-class of the manager. Its listener letters are
 obfuscated and come in look-alike pairs (current/next instruction, three (I) callbacks, two street callbacks), so
 each is traced from the manager's descriptive JNI entry point (onCurrentInstructionChangedJNI, ...) through the
-posted runnable's switch case to the manager method and the listener method that method invokes.
+posted runnable's switch case to the manager method and the listener method that method invokes. The lane
+callback (TG_M_LANES) is the one listener method invoked by the manager's static method that unpacks the
+NavigationLaneList proto; builds without the split feed leave it empty and the notification shows no lanes.
 """
 import pathlib
 import re
@@ -124,7 +126,7 @@ def main(decode_dir, out_java):
     m_eta = resolve("k", SS_I, called_letters(lambda n: "eta" in n), "eta")
     remaining_field = eta_distance_field()
     assert remaining_field, "remaining-distance field (getRawMeters -> iput in the eta DistanceUpdate handler) not found"
-    tg = {"TG_LOOKUP_CLASS": "", "TG_LOOKUP_METHOD": "", "TG_ADD_LISTENER": ""}
+    tg = {"TG_LOOKUP_CLASS": "", "TG_LOOKUP_METHOD": "", "TG_ADD_LISTENER": "", "TG_M_LANES": ""}
 
     if enum_cands:   # one feed (up to 5.27): everything on the info listener
         # Instruction: prefer the one driven by onCurrentInstructionChanged over onNextInstruction.
@@ -154,8 +156,15 @@ def main(decode_dir, out_java):
                                   r"\(Ljava/lang/Class;\)Ljava/lang/Object;", f.read_text(encoding="utf-8"))
         assert lookups, "DI lookup of the turn-guidance manager not found"
         _, lk_cls, lk_m = max(set(lookups), key=lookups.count)
-        tg = {"TG_LOOKUP_CLASS": lk_cls.replace("/", "."), "TG_LOOKUP_METHOD": lk_m, "TG_ADD_LISTENER": tg_add}
         tg_methods = smali_methods(read(f"{tg_itf}.smali"))
+        lane_m = re.search(r"^\.method[^\n]*? (\w+)\((L" + TG + r";Lcom/waze/jni/protos/navigate/NavigationLaneList;)\)",
+                           tg_text, re.M)
+        assert lane_m, "lane-list handler (static, takes NavigationLaneList) not found"
+        lanes = set(re.findall(rf"L{re.escape(tg_itf)};->(\w+)\(", method_body(tg_text, lane_m.group(1), lane_m.group(2))))
+        assert len(lanes) == 1, f"lane-list handler: expected one listener call, got {lanes}"
+        m_lanes = lanes.pop()
+        tg = {"TG_LOOKUP_CLASS": lk_cls.replace("/", "."), "TG_LOOKUP_METHOD": lk_m, "TG_ADD_LISTENER": tg_add,
+              "TG_M_LANES": m_lanes}
 
         def traced(jni):
             """Listener letters reached from the manager's JNI entry point `jni`, via the runnable it posts."""
@@ -182,7 +191,7 @@ def main(decode_dir, out_java):
         m_exit = one("onExitNumberChangedJNI", "I")
         m_next = one("onNextNameChangedJNI", STREET_DESC)
         # both proxies dispatch by name alone, so no letter may exist on the other feed's interface
-        clash = ({m_instruction, m_distance, m_exit, m_next} & set(methods)) | \
+        clash = ({m_instruction, m_distance, m_exit, m_next, m_lanes} & set(methods)) | \
                 ({m_navstate, m_eta, m_remaining} & set(tg_methods))
         assert not clash, f"letters {clash} exist on both listener interfaces"
         interface = f"{interface} + {tg_itf}"

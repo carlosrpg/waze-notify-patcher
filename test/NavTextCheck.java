@@ -22,11 +22,22 @@ public final class NavTextCheck {
         eq(NavText.distance(1180), "1.2 km");
         eq(NavText.distance(0), "");
 
-        eq(NavText.instruction("TURN_LEFT", 0, " Rua Augusta "), "Rua Augusta");
-        eq(NavText.instruction("TURN_LEFT", 0, ""), "Turn left");
-        eq(NavText.instruction("ROUNDABOUT_EXIT_LEFT", 2, "Av. Paulista"), "Exit 2 · Av. Paulista");
-        eq(NavText.instruction("ROUNDABOUT_ENTER", 3, null), "Exit 3");
-        eq(NavText.instruction("TURN_RIGHT", 2, "Main St"), "Main St");
+        eq(NavText.instruction("TURN_LEFT", " Rua Augusta ", "Vire à esquerda"), "Rua Augusta");
+        eq(NavText.instruction("TURN_LEFT", "", "Vire à esquerda"), "Vire à esquerda");
+        eq(NavText.instruction("TURN_LEFT", "", null), "Turn left");
+        eq(NavText.instruction("ROUNDABOUT_EXIT_LEFT", "Av. Paulista", null), "Av. Paulista");
+
+        eq(NavText.promptKey("ROUNDABOUT_EXIT_LEFT", 2), "CUSTOM_PROMPT_SECOND");
+        eq(NavText.promptKey("ROUNDABOUT_ENTER", 0), "CUSTOM_PROMPT_ROUNDABOUT");
+        eq(NavText.promptKey("ROUNDABOUT_ENTER", 9), "CUSTOM_PROMPT_ROUNDABOUT");
+        eq(NavText.promptKey("ROUNDABOUT_U", 3), "CUSTOM_PROMPT_U_TURN");
+        eq(NavText.promptKey("SHARP_RIGHT", 0), "CUSTOM_PROMPT_TURN_RIGHT");
+        eq(NavText.promptKey("APPROACHING_DESTINATION", 0), "CUSTOM_PROMPT_ARRIVE");
+        eq(NavText.promptKey("NAV_INSTR_NONE", 0), null);
+
+        eq(NavText.exitLabel("ROUNDABOUT_EXIT_RIGHT", 3), "3");
+        eq(NavText.exitLabel("ROUNDABOUT_EXIT_RIGHT", 0), null);
+        eq(NavText.exitLabel("TURN_RIGHT", 2), null);
 
         eq(NavText.eta(12), "12 min");
         eq(NavText.eta(80), "1 h 20 min");

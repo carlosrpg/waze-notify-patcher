@@ -3,9 +3,14 @@
 Adds a standard turn-by-turn **navigation notification** to a Waze APK, so a notification listener (the
 QuickSettings drawer) can read directions on the car. Stock Waze, run as a normal app (no Android Auto session),
 posts no directions in a notification — only "Waze — Running. Tap to open." This patch posts, during navigation:
-the distance to the next turn as the title, the road as the text ("Exit 2 · Av. Paulista" at roundabouts), the
-ETA and remaining distance as the sub-text, and Waze's own manoeuvre arrow as the large icon (category
-`navigation`, ongoing, ≤ 1 update/second).
+the distance to the next turn as the title, the road as the text, the ETA and remaining distance as the sub-text,
+Waze's own manoeuvre arrow as the large icon (with the roundabout exit number on it, as in Waze's turn box) and,
+when Waze shows lane guidance, the lanes as the big picture (`EXTRA_PICTURE`: one cell per lane, the lanes to take
+in Waze's selected colour). Category `navigation`, ongoing, ≤ 1 update/second.
+
+When there is no road name the text is the manoeuvre in **Waze's in-app language**: the notifier asks Waze's own
+translator (`NativeManager.langGetIntNTV`) for its `DisplayStrings` prompt (`CUSTOM_PROMPT_TURN_LEFT`,
+`CUSTOM_PROMPT_SECOND`, …), looked up by constant name, and falls back to English only if that call is missing.
 
 It is built to survive Waze updates: nothing about Waze's obfuscated names is hardcoded. `tools/derive.py`
 reads each APK and writes the few names that move; the runtime registers by **reflection + a dynamic proxy**, so
@@ -115,7 +120,8 @@ A local build (`BUILD_NUMBER` unset) never asks.
   - `ADD_LISTENER` + the interface — the manager method taking one `com.waze.navigate` interface whose body adds
     to a `Set` (this is how add is told apart from remove/restore).
   - the listener letters (`p` nav-state, `d` current instruction, `E` distance, `k` ETA, `m` roundabout exit,
-    `s` next street, `F` eta-distance trigger). These have been stable; the script verifies each by signature and,
+    `s` next street, `F` eta-distance trigger). On 5.28+ the turn-guidance listener also has a lane callback
+    (`TG_M_LANES`): the one listener method called by the manager's static method that unpacks `NavigationLaneList`. These have been stable; the script verifies each by signature and,
     when the manager keeps descriptive handler names (e.g. `onCurrentInstructionChanged`, `onEtaDistanceChanged`),
     confirms the ambiguous pairs (distance vs ETA, current vs next instruction/street) from the call sites. It
     **fails loudly** if an assumption breaks, so a future build that moved a letter is caught at build time, not
@@ -143,6 +149,7 @@ sub-text while navigating.
 
 - `src/com/carlosrpg/wazenotify/NavText.java` — pure text/icon rules (unit-tested by `test/NavTextCheck.java`).
 - `src/com/carlosrpg/wazenotify/NavNotifier.java` — reflection + proxy + notification (version-independent).
+- `src/com/carlosrpg/wazenotify/LaneStrip.java` — reads Waze's lane protobufs and draws the lane picture.
 - `src/com/carlosrpg/wazenotify/ClusterLayout.java`, `JconfigBridge.java` — cluster layout; JConfig glue.
 - `src/com/carlosrpg/wazenotify/ClusterButton.java`, `tools/hook_cluster_button.py` — the cluster toggle.
 - `src/com/carlosrpg/wazenotify/Updater.java`, `UpdateTag.java` — update check, download and install.

@@ -33,7 +33,7 @@ public final class ClusterLayout implements Application.ActivityLifecycleCallbac
     private static final String TAG = "WazeCluster";
 
     // shortcut: values from a single read per attach; a file edit needs Waze to move display (or restart).
-    private static float navX = 0.3f, navTop = 0.3f, navScale = 0.8f;
+    private static float navX = 0.4f, navTop = 0.3f, navScale = 0.8f;
     // car marker (JConfig's own height is 0.8; lower = higher on screen). The alert state has its own height (car.y.alert),
     // kept from when Waze's ETA changed shape during alerts. car.y puts the car where the speedometer sits, just
     // above the ETA box (emulator cluster at the car's 1920x720); speed.dx then moves the speedometer right, clear of it.
