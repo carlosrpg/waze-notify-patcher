@@ -8,6 +8,9 @@ import android.app.PendingIntent;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.os.Handler;
 import android.os.Looper;
@@ -51,6 +54,14 @@ public final class NavNotifier {
     private volatile int distMeters;
     private volatile String nextStreet = "";
     private volatile int etaMinutes;
+    private volatile LaneStrip.Lanes lanes;
+    private LaneStrip.Lanes lanesDrawn;
+    private Bitmap lanesBmp;
+
+    // Waze's own translator (its in-app language, not Android's): NativeManager.langGetIntNTV(DisplayStrings id).
+    private Object nativeManager;
+    private Method langGet;
+    private boolean langMissing;
 
     // Total remaining distance to the destination: read from Waze's etaDistanceMeters field, because its listener
     // callback is handed the next-turn distance instead (a Waze bug). Resolved once at register(), read at publish.
@@ -157,7 +168,7 @@ public final class NavNotifier {
             try {
                 if (name.equals(NavMap.M_NAVSTATE)) {
                     navigating = Boolean.TRUE.equals(args[0]);
-                    if (!navigating) { instruction = ""; exit = 0; nextStreet = ""; distMeters = 0; }
+                    if (!navigating) { instruction = ""; exit = 0; nextStreet = ""; distMeters = 0; lanes = null; }
                     changed();
                 } else if (name.equals(NavMap.M_INSTRUCTION)) {
                     instruction = args[0] instanceof Enum ? ((Enum<?>) args[0]).name() : "";
@@ -173,6 +184,9 @@ public final class NavNotifier {
                     changed();
                 } else if (name.equals(NavMap.M_ETA)) {
                     etaMinutes = intArg(args[2]);  // args[0]/[1] are Waze's value+unit words; minutes are language-neutral
+                    changed();
+                } else if (name.equals(NavMap.TG_M_LANES)) {
+                    lanes = LaneStrip.read(args[0]);
                     changed();
                 } else if (name.equals(NavMap.M_REMAINING)) {
                     changed();  // trigger only; this callback is handed the next-turn distance (Waze bug) — real total read at publish
@@ -235,9 +249,12 @@ public final class NavNotifier {
             return;
         }
         // Clean separate fields so QuickSettings owns the layout: distance (title), road (text),
-        // ETA + remaining distance (subText).
+        // ETA + remaining distance (subText), arrow (large icon), lanes (big picture).
+        String instr = instruction;
         String title = NavText.distance(distMeters);
-        String text = NavText.instruction(instruction, exit, nextStreet);
+        String street = nextStreet;
+        String text = NavText.instruction(instr, street,
+                street.trim().isEmpty() ? translate(NavText.promptKey(instr, exit)) : null);
         if (title.isEmpty() && text.isEmpty()) return;
 
         Notification.Builder b = new Notification.Builder(app, CHANNEL)
@@ -251,15 +268,17 @@ public final class NavNotifier {
                 .setVisibility(Notification.VISIBILITY_PUBLIC);
         String sub = NavText.join(NavText.eta(etaMinutes), NavText.remaining(readRemaining()));
         if (!sub.isEmpty()) b.setSubText(sub);
-        Bitmap arrow = arrow(NavText.drawableFor(instruction));
+        Bitmap arrow = arrow(NavText.drawableFor(instr), NavText.exitLabel(instr, exit));
         if (arrow != null) b.setLargeIcon(arrow);
+        Bitmap lanePic = lanesBitmap();
+        if (lanePic != null) b.setStyle(new Notification.BigPictureStyle().bigPicture(lanePic));
         Intent launch = app.getPackageManager().getLaunchIntentForPackage(app.getPackageName());
         if (launch != null) {
             b.setContentIntent(PendingIntent.getActivity(app, 0, launch,
                     PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT));
         }
         // Lets you confirm the fields on the car (where real navigation runs): adb logcat -s WazeNavNotifier
-        Log.i(TAG, "nav title='" + title + "' text='" + text + "' sub='" + sub + "'");
+        Log.i(TAG, "nav title='" + title + "' text='" + text + "' sub='" + sub + "' lanes=" + (lanePic != null));
         nm.notify(NOTIFICATION_ID, b.build());
         showing = true;
     }
@@ -269,20 +288,62 @@ public final class NavNotifier {
         return id != 0 ? id : app.getApplicationInfo().icon;
     }
 
-    private Bitmap arrow(String resName) {
+    /** Waze's arrow drawable, with the roundabout exit number in its middle the way Waze's turn box draws it. */
+    private Bitmap arrow(String resName, String label) {
         if (resName == null) return null;
-        if (icons.containsKey(resName)) return icons.get(resName);
+        String key = label == null ? resName : resName + "#" + label;
+        if (icons.containsKey(key)) return icons.get(key);
         Bitmap bmp = null;
         int id = app.getResources().getIdentifier(resName, "drawable", app.getPackageName());
         if (id != 0) {
             Drawable d = app.getDrawable(id);
             if (d != null) {
                 bmp = Bitmap.createBitmap(ICON_PX, ICON_PX, Bitmap.Config.ARGB_8888);
+                Canvas canvas = new Canvas(bmp);
                 d.setBounds(0, 0, ICON_PX, ICON_PX);
-                d.draw(new Canvas(bmp));
+                d.draw(canvas);
+                if (label != null) {
+                    Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+                    int cid = app.getResources().getIdentifier("navBar_main_text", "color", app.getPackageName());
+                    p.setColor(cid != 0 ? app.getColor(cid) : Color.WHITE);
+                    p.setTypeface(Typeface.DEFAULT_BOLD);
+                    p.setTextSize(ICON_PX * 0.3f);
+                    p.setTextAlign(Paint.Align.CENTER);
+                    canvas.drawText(label, ICON_PX / 2f, ICON_PX / 2f - (p.ascent() + p.descent()) / 2f, p);
+                }
             }
         }
-        icons.put(resName, bmp);
+        icons.put(key, bmp);
         return bmp;
+    }
+
+    /** The lane strip for the current lanes, redrawn only when Waze sends new ones. */
+    private Bitmap lanesBitmap() {
+        LaneStrip.Lanes l = lanes;
+        if (l != lanesDrawn) {
+            lanesDrawn = l;
+            lanesBmp = l == null ? null : LaneStrip.draw(l);
+        }
+        return lanesBmp;
+    }
+
+    /** Waze's display string {@code DS_<key>} in Waze's own language, or null. */
+    private String translate(String key) {
+        if (key == null || langMissing) return null;
+        try {
+            if (langGet == null) {
+                Class<?> nm = Class.forName("com.waze.NativeManager");
+                nativeManager = nm.getMethod("getInstance").invoke(null);
+                langGet = nm.getDeclaredMethod("langGetIntNTV", int.class);
+                langGet.setAccessible(true);
+            }
+            int id = Class.forName("com.waze.strings.DisplayStrings").getField("DS_" + key).getInt(null);
+            Object s = langGet.invoke(nativeManager, id);
+            return s == null ? null : s.toString();
+        } catch (Throwable t) {
+            if (langGet == null) langMissing = true;   // no translator in this Waze: English fallback from now on
+            Log.w(TAG, "no translation for " + key + ": " + t);
+            return null;
+        }
     }
 }
