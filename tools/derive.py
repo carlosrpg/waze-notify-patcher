@@ -189,7 +189,8 @@ def main(decode_dir, out_java):
         m_instruction = one("onCurrentInstructionChangedJNI", enum_desc)
         m_distance = one("onCurrentInstructionDistanceChangedJNI", SS_I)
         m_exit = one("onExitNumberChangedJNI", "I")
-        m_next = one("onNextNameChangedJNI", STREET_DESC)
+        # the street the current turn leads onto; onNextNameChangedJNI is the following turn's ("and then") street
+        m_next = one("onStreetNameChangedJNI", STREET_DESC)
         # both proxies dispatch by name alone, so no letter may exist on the other feed's interface
         clash = ({m_instruction, m_distance, m_exit, m_next, m_lanes} & set(methods)) | \
                 ({m_navstate, m_eta, m_remaining} & set(tg_methods))
