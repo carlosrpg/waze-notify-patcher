@@ -121,7 +121,9 @@ A local build (`BUILD_NUMBER` unset) never asks.
     to a `Set` (this is how add is told apart from remove/restore).
   - the listener letters (`p` nav-state, `d` current instruction, `E` distance, `k` ETA, `m` roundabout exit,
     `s` next street, `F` eta-distance trigger). On 5.28+ the turn-guidance listener also has a lane callback
-    (`TG_M_LANES`): the one listener method called by the manager's static method that unpacks `NavigationLaneList`. These have been stable; the script verifies each by signature and,
+    (`TG_M_LANES`): the one listener method called by the manager's static method that unpacks `NavigationLaneList`.
+    Its street is the one `onStreetNameChangedJNI` reports (the road the turn leads onto); `onNextNameChangedJNI` is
+    the following turn's, Waze's "and then" chip. These have been stable; the script verifies each by signature and,
     when the manager keeps descriptive handler names (e.g. `onCurrentInstructionChanged`, `onEtaDistanceChanged`),
     confirms the ambiguous pairs (distance vs ETA, current vs next instruction/street) from the call sites. It
     **fails loudly** if an assumption breaks, so a future build that moved a letter is caught at build time, not
