@@ -30,7 +30,7 @@ import java.net.URL;
 
 /**
  * Once per start, asks GitHub for this patcher's latest release. When its build number is higher than this build's
- * ({@link BuildInfo#BUILD}, the CI run number; 0 in a local build, which never asks), a dialog offers the update; on
+ * ({@link BuildInfo#BUILD}, main's commit count; 0 in a local build, which never asks), a dialog offers the update; on
  * yes the release's APK is downloaded and handed to a PackageInstaller session, and Android shows its own confirm
  * screen. Releases are signed with the same key, so they install over this build.
  */

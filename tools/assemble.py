@@ -5,13 +5,16 @@ apktool's rebuild can corrupt resources on Windows (names colliding by case), so
 res/, lib/, resources.arsc and the manifest are copied byte-for-byte from the original. The notifier is appended
 as the next classesN+1.dex. Works for any dex count (this build has 10). With a package id, the manifest and the
 resource table are given that application id (tools/rename_package.py) so the result installs next to Waze.
+VERSION_NAME (env) replaces the manifest's versionName; MICROG_SIGNATURE (env) adds microG's manifest entries.
 """
 import pathlib
 import sys
 import zipfile
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))   # run with python -I, which leaves it out
-from rename_package import add_permission, rename_manifest, rename_table
+import os
+
+from rename_package import add_microg, add_permission, rename_manifest, rename_table, set_version_name
 
 
 def main(original, built, notifier_dex, out, package=None):
@@ -21,6 +24,12 @@ def main(original, built, notifier_dex, out, package=None):
     with zipfile.ZipFile(original) as src:
         # the updater (Updater.java) installs the next release itself
         manifest = add_permission(src.read("AndroidManifest.xml"), "android.permission.REQUEST_INSTALL_PACKAGES")
+        if os.environ.get("VERSION_NAME"):   # the full version patch.sh computed (Waze's + our build)
+            manifest = set_version_name(manifest, os.environ["VERSION_NAME"])
+            print(f"versionName {os.environ['VERSION_NAME']}")
+        if os.environ.get("MICROG_SIGNATURE"):   # before the rename: microG must present the original package
+            manifest = add_microg(manifest, os.environ["MICROG_SIGNATURE"])
+            print("microG spoof meta-data, queries and c2dm names added")
         renamed = {"AndroidManifest.xml": manifest}
         if package:
             manifest, old, n = rename_manifest(manifest, package)

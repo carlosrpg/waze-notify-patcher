@@ -1,6 +1,6 @@
 package com.carlosrpg.wazenotify;
 
-/** Release tags are "waze-<waze version>-build<CI run number>"; the run number alone orders them. */
+/** Release tags are "waze-<waze version>-build<main commit count>"; the number alone orders them. */
 final class UpdateTag {
     private UpdateTag() {}
 

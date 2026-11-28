@@ -60,42 +60,48 @@ workflow artifact on pull requests, and as a GitHub release on `main`. Signing c
 3. The ported JConfig classes and their hooks in Waze's code (unless `JCONFIG=`).
 4. The application id (manifest package, provider authorities, Waze's own permissions, resource table package)
    and the install permission in the manifest.
-5. One more button in Waze's map-button column (the cluster toggle).
-6. Re-signs. Resources and native libs are copied byte-for-byte from the original APK (only the dex are taken
+5. Re-signs. Resources and native libs are copied byte-for-byte from the original APK (only the dex are taken
    from the apktool rebuild; apktool corrupts resources by case-collision on Windows).
 
 `tools/verify.py` confirms the notifier is present, the hook is wired, and nothing else changed.
+
+## microG (no Google Play services)
+
+The car has no Google Play services, so the build points Waze's Play-services client at **microG** instead, the
+way ReVanced/Morphe builds of YouTube do (`tools/microg.py`, `rename_package.add_microg`):
+
+- Waze's references to `com.google.android.gms` (and the permissions, actions and provider authorities microG
+  serves under its own name) move to `app.revanced.android.gms`, the package of ReVanced GmsCore and Morphe's
+  MicroG-RE.
+- The client's availability check and Google signature checks pass for microG.
+- "Log in with Google": Waze takes the ID token through the sign-in routes microG serves, then gets the server auth
+  code for its own server from microG through `AccountManager` (`MicrogAuth`), not Play services' authorization API:
+  microG's authorization service fails for a renamed app (it looks `com.waze` up as installed). The first time,
+  microG asks you to allow Waze; the login then carries on by itself.
+- The manifest gets microG's spoof meta-data: Waze's original package (`com.waze`) and the SHA-1 of Waze's
+  certificate, so microG asks Google for tokens as the real Waze. microG is added to `<queries>`; the push (c2dm)
+  names move to microG's.
+
+On the car: install MicroG-RE (https://github.com/MorpheApp/MicroG-RE/releases), add the Google account in its
+settings, then "Log in with Google" in Waze. `MICROG_SIGNATURE= bash patch.sh …` builds for Google Play services
+instead. The patches are found by stable strings and fail the build loudly if a future Waze moves them.
 
 ## Cluster
 
 `ClusterLayout` acts when a Waze window is on a landscape display other than the main one (the instrument
 cluster): it shrinks Waze's turn box and moves it to the cluster ellipse's north-west, and with the JConfig patches
 keeps the car marker between the speedometer and the ETA (re-applied every 2 s, with its own height while an alert
-shows the full-width ETA bar). Tune it without rebuilding in
-`/sdcard/Android/data/com.carlosrpg.waze/files/cluster.properties`: `nav.x`, `nav.top`, `nav.scale`, `car.x`,
-`car.y`, `car.y.alert`, `speed.dx` (speedometer shift to the right; all fractions of the window), `speed.scale`, then send Waze to
-the cluster again.
+shows the full-width ETA bar). The positions are built in (`ClusterLayout`), matched to the car's 1920x720 cluster.
 
-### Cluster button
-
-`tools/hook_cluster_button.py` adds a button to Waze's own map-button column, right after the sound button (drawn
-by Waze's button composable, so it has the same size and style and hides with the others). A tap moves the running
-Waze to the cluster display. Its icon is Waze's `ic_open_in_new` drawable. The button is optional: if a future Waze drops that drawable or changes
-its button code, `patch.sh` prints a warning and builds without it.
-
-On the cluster the window cannot be touched, so a copy of the button then floats on the centre display and brings
-Waze back. That needs the overlay permission, which a sideloaded app does not get by itself:
-
-```bash
-adb shell appops set com.carlosrpg.waze SYSTEM_ALERT_WINDOW allow
-```
-
-Without it, Waze comes back by opening it from the launcher (or from QuickSettings). The button only moves the
-window: it does not send the car's cluster hand-over signals that QuickSettings sends.
+Waze goes to the cluster and comes back through QuickSettings, or by opening it from the launcher; none of it
+needs adb.
 
 ## Updates
 
-A CI release build knows its build number (the `-buildN` of its release tag; `BUILD_NUMBER` for `patch.sh`). Once
+Every build from `main` has its own full version, `<Waze version>-build<N>`, where N is main's commit count
+(`git rev-list --count HEAD`; `BUILD_NUMBER` for `patch.sh`). It is the APK's versionName, its file name
+(`waze-5.28.5.0-build17-carlosrpg.apk`), the release tag (`waze-5.28.5.0-build17`) and the build number the app
+compares. Pull requests and local builds are `<Waze version>-dev`. Once
 per start, on the centre display, it asks GitHub for this repository's latest release and, when that build is
 newer, offers to download and install it (`Updater.java`): the APK goes to a `PackageInstaller` session and Android
 shows its own confirm screen. `assemble.py` adds `REQUEST_INSTALL_PACKAGES` to the manifest for this. If the car has
@@ -153,7 +159,7 @@ sub-text while navigating.
 - `src/com/carlosrpg/wazenotify/NavNotifier.java` — reflection + proxy + notification (version-independent).
 - `src/com/carlosrpg/wazenotify/LaneStrip.java` — reads Waze's lane protobufs and draws the lane picture.
 - `src/com/carlosrpg/wazenotify/ClusterLayout.java`, `JconfigBridge.java` — cluster layout; JConfig glue.
-- `src/com/carlosrpg/wazenotify/ClusterButton.java`, `tools/hook_cluster_button.py` — the cluster toggle.
+- `src/com/carlosrpg/wazenotify/MicrogAuth.java`, `tools/microg.py` — microG instead of Google Play services.
 - `src/com/carlosrpg/wazenotify/Updater.java`, `UpdateTag.java` — update check, download and install.
 - `tools/derive.py` — writes `gen/NavMap.java` per APK.
 - `tools/hook_oncreate.py` — inserts the onCreate call.
