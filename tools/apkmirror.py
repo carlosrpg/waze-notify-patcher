@@ -12,6 +12,8 @@ import re
 import shutil
 import subprocess
 import sys
+import time
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -25,8 +27,16 @@ UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chr
 def get(path, referer=BASE + "/"):
     req = urllib.request.Request(path if path.startswith("http") else BASE + path,
                                  headers={"User-Agent": UA, "Referer": referer, "Accept-Language": "en"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        return r.read(), r.geturl()
+    for attempt in range(5):
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return r.read(), r.geturl()
+        except urllib.error.HTTPError as e:
+            # APKMirror's Cloudflare refuses some runner IPs for a while; a later try usually gets through
+            if e.code not in (403, 429) and e.code < 500 or attempt == 4:
+                raise
+            print(f"HTTP {e.code} on {req.full_url}, retrying", file=sys.stderr)
+            time.sleep(30 * (attempt + 1))
 
 
 def text(html):
