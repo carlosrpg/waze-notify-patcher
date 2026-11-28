@@ -10,11 +10,18 @@
 #            Android Automotive, cluster ETA box, alerts, car position. Default: the classes kept in jconfig/
 #            (from JConfig's 5.23.0.2 build); a JConfig build's .apk also works. JCONFIG= builds without them
 #            (notification and turn box only).
+#   MICROG_SIGNATURE  the SHA-1 (40 hex) of Waze's signing certificate: Google sign-in and the other Play services
+#            go to microG (app.revanced.android.gms, ReVanced/Morphe GmsCore), which presents Waze's package name and
+#            this signature to Google (tools/microg.py). Default: Waze's certificate; MICROG_SIGNATURE= builds for
+#            Google Play services.
 #   PACKAGE  application id of the result (default com.carlosrpg.waze, so it installs next to a normal Waze);
 #            PACKAGE= keeps com.waze.
 # Tools: ANDROID_HOME (else %LOCALAPPDATA%/Android/Sdk), JAVA_HOME (JDK 17+), APKTOOL (apktool 3.x jar).
 # Signing: KEYSTORE, KS_PASS, KS_ALIAS, KEY_PASS; unset ones come from signing.properties next to this script
 # (gitignored: storeFile, storePassword, keyAlias, keyPassword), else waze-patch.keystore (created on first run).
+# BUILD_NUMBER: this build's number (CI: the commit count of main); the APK's versionName becomes
+#   "<Waze version>-build<N>" and the app offers releases with a higher number. Unset/0: "<Waze version>-dev",
+#   no update check.
 # Output: <output.apk> (default: <input>-notify.apk next to the input).
 set -euo pipefail
 
@@ -31,6 +38,8 @@ KS_ALIAS="${KS_ALIAS:-$(prop keyAlias)}"; KS_ALIAS="${KS_ALIAS:-wazepatch}"
 KEY_PASS="${KEY_PASS:-$(prop keyPassword)}"; KEY_PASS="${KEY_PASS:-$KS_PASS}"
 JCONFIG="${JCONFIG-$HERE/jconfig}"
 PACKAGE="${PACKAGE-com.carlosrpg.waze}"
+# CN=Alex Agranovich, O=Waze: the certificate every Waze release is signed with
+export MICROG_SIGNATURE="${MICROG_SIGNATURE-35b438fe1bc69d975dc8702dc16ab69ebf65f26f}"
 PY="${PYTHON:-python}"
 
 MS_JDK="/c/Program Files/Microsoft/jdk-17.0.14.7-hotspot"
@@ -64,6 +73,11 @@ if [ -n "${JCONFIG:-}" ]; then
   "$PY" -I "$HERE/tools/port_jconfig.py" "$(w "$JC_DIR")" "$(w "$WORK/base")"
 fi
 
+if [ -n "$MICROG_SIGNATURE" ]; then
+  echo "== 2c. microG instead of Google Play services"
+  "$PY" -I "$HERE/tools/microg.py" "$(w "$WORK/base")"
+fi
+
 echo "== 3. find the Application class from the manifest"
 APP_CLASS=$("$BT/aapt2$EXE" dump xmltree --file AndroidManifest.xml "$(w "$IN")" 2>/dev/null \
   | awk '/E: application/{a=1} a && /A: http:\/\/schemas.android.com\/apk\/res\/android:name/{print; exit}' \
@@ -71,13 +85,18 @@ APP_CLASS=$("$BT/aapt2$EXE" dump xmltree --file AndroidManifest.xml "$(w "$IN")"
 test -n "$APP_CLASS" || { echo "could not read application android:name"; exit 1; }
 APP_SMALI=$(ls "$WORK"/base/smali*/"$(echo "$APP_CLASS" | tr . /)".smali)
 echo "   application: $APP_CLASS"
+WAZE_VERSION=$("$BT/aapt2$EXE" dump badging "$(w "$IN")" 2>/dev/null | sed -nE "s/^package:.* versionName='([^']+)'.*/\1/p")
+test -n "$WAZE_VERSION" || { echo "could not read versionName"; exit 1; }
+BUILD=$((${BUILD_NUMBER:-0}))
+if [ "$BUILD" -gt 0 ]; then export VERSION_NAME="$WAZE_VERSION-build$BUILD"; else export VERSION_NAME="$WAZE_VERSION-dev"; fi
+echo "   version: $VERSION_NAME"
 
 echo "== 4. derive Waze's obfuscated names for this apk -> NavMap.java"
 "$PY" -I "$HERE/tools/derive.py" "$(w "$WORK/base")" "$(w "$HERE/gen/NavMap.java")"
 
 echo "== 5. compile the notifier (reflection-based; compiles against android.jar only) and dex it"
-# BUILD_NUMBER: the CI run number a release is tagged with; 0 (a local build) never asks for updates.
-echo "package com.carlosrpg.wazenotify; final class BuildInfo { static final int BUILD = $((${BUILD_NUMBER:-0})); }" > "$HERE/gen/BuildInfo.java"
+# BUILD: the number a release is tagged with; 0 (a local build) never asks for updates.
+echo "package com.carlosrpg.wazenotify; final class BuildInfo { static final int BUILD = $BUILD; }" > "$HERE/gen/BuildInfo.java"
 SRC=(); for f in "$HERE"/src/com/carlosrpg/wazenotify/*.java "$HERE"/gen/*.java; do SRC+=("$(w "$f")"); done
 javac --release 8 -encoding UTF-8 -nowarn -cp "$(w "$ANDROID_JAR")" -d "$(w "$WORK/classes")" "${SRC[@]}"
 CLS=(); while IFS= read -r c; do CLS+=("$(w "$c")"); done < <(find "$WORK/classes" -name '*.class')
@@ -86,15 +105,6 @@ MIN=$("$BT/aapt2$EXE" dump badging "$(w "$IN")" 2>/dev/null | sed -nE "s/.*sdkVe
 
 echo "== 6. hook the Application's onCreate (first instruction)"
 "$PY" -I "$HERE/tools/hook_oncreate.py" "$(w "$APP_SMALI")"
-
-echo "== 6c. add the cluster toggle to Waze's map-button column"
-# Optional: a Waze that changed its button code or dropped the icon is still built, without the button
-# (::warning:: shows on the CI run).
-if ! "$BT/aapt2$EXE" dump resources "$(w "$IN")" 2>/dev/null | grep -q "drawable/ic_open_in_new"; then
-  echo "::warning::no cluster button: this Waze has no ic_open_in_new drawable (ClusterButton.ICON)"
-elif ! "$PY" -I "$HERE/tools/hook_cluster_button.py" "$(w "$WORK/base")"; then
-  echo "::warning::no cluster button: Waze's sound button code changed (tools/hook_cluster_button.py)"
-fi
 
 echo "== 7. rebuild and assemble (resources/libs/manifest from the original, dex from the rebuild + notifier)"
 rm -f "$WORK/apktool.apk" "$WORK/unsigned.apk" "$WORK/aligned.apk"
@@ -122,4 +132,6 @@ if [ -n "$PACKAGE" ]; then
     || { echo "FAIL application id is not $PACKAGE"; exit 1; }
   echo "application id $PACKAGE"
 fi
+"$BT/aapt2$EXE" dump badging "$(w "$OUT")" 2>/dev/null | grep -q "versionName='$VERSION_NAME'"   || { echo "FAIL versionName is not $VERSION_NAME"; exit 1; }
+echo "version $VERSION_NAME"
 echo "Done: $OUT"

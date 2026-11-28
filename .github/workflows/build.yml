@@ -28,6 +28,13 @@ jobs:
       APKTOOL_VERSION: 3.0.3
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the whole history: the build number is main's commit count
+
+      - name: Build number
+        # Every commit on main counts one up, so each main build has its own full version "<Waze>-build<N>".
+        # Pull requests: 0 (versionName "<Waze>-dev", no update check).
+        run: echo "BUILD_NUMBER=$([ "$RELEASE" = true ] && git rev-list --count HEAD || echo 0)" >> "$GITHUB_ENV"
 
       - uses: actions/setup-java@v6
         with:
@@ -52,7 +59,11 @@ jobs:
         run: |
           set -o pipefail   # a failed download stops here, not in the next step
           python -I tools/apkmirror.py "$RUNNER_TEMP/in" | tee "$RUNNER_TEMP/apkmirror.log"
-          echo "version=$(tail -1 "$RUNNER_TEMP/apkmirror.log")" >> "$GITHUB_OUTPUT"
+          VERSION=$(tail -1 "$RUNNER_TEMP/apkmirror.log")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # the APK's versionName, set by patch.sh from the same build number
+          if [ "$BUILD_NUMBER" -gt 0 ]; then FULL="$VERSION-build$BUILD_NUMBER"; else FULL="$VERSION-dev"; fi
+          echo "full=$FULL" >> "$GITHUB_OUTPUT"
 
       - name: Signing key
         env:
@@ -79,17 +90,16 @@ jobs:
       - name: Patch
         env:
           VERSION: ${{ steps.waze.outputs.version }}
-          # the release tag's build number, which the app's update check compares; 0 = never ask (pull requests)
-          BUILD_NUMBER: ${{ env.RELEASE == 'true' && github.run_number || 0 }}
+          FULL: ${{ steps.waze.outputs.full }}
         run: |
-          OUT="$RUNNER_TEMP/out/waze-$VERSION-carlosrpg.apk"
+          OUT="$RUNNER_TEMP/out/waze-$FULL-carlosrpg.apk"
           mkdir -p "$(dirname "$OUT")"
           bash patch.sh "$RUNNER_TEMP/in/waze-$VERSION.apk" "$OUT"
           echo "APK=$OUT" >> "$GITHUB_ENV"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: waze-${{ steps.waze.outputs.version }}-carlosrpg
+          name: waze-${{ steps.waze.outputs.full }}-carlosrpg
           path: ${{ env.APK }}
           if-no-files-found: error
 
@@ -98,10 +108,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.waze.outputs.version }}
+          FULL: ${{ steps.waze.outputs.full }}
         run: |
-          TAG="waze-$VERSION-build${{ github.run_number }}"
+          TAG="waze-$FULL"   # the app's update check reads the number after -build
+          if gh release view "$TAG" >/dev/null 2>&1; then echo "::notice::$TAG already released"; exit 0; fi
           printf '%s\n' "Waze $VERSION (latest stable on APKMirror) with the JConfig cluster patches ported, the" \
             "turn-by-turn notification and the cluster turn box, as com.carlosrpg.waze (installs next to Waze)." \
+            "Google sign-in and the other Play services go through microG (MicroG-RE / ReVanced GmsCore)." \
             "" "Patcher commit: $GITHUB_SHA" > "$RUNNER_TEMP/notes.md"
-          gh release create "$TAG" "$APK" --target "$GITHUB_SHA" --title "Waze $VERSION (build ${{ github.run_number }})" \
+          gh release create "$TAG" "$APK" --target "$GITHUB_SHA" --title "Waze $FULL" \
             --notes-file "$RUNNER_TEMP/notes.md"

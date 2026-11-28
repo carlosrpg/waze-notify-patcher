@@ -12,12 +12,8 @@ import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.view.ViewTreeObserver;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.Properties;
 
 /**
  * Our part of Waze's instrument-cluster layout, on top of the ported JConfig patches (tools/port_jconfig.py), which
@@ -26,18 +22,16 @@ import java.util.Properties;
  * moves it to the ellipse's north-west, puts the car marker just above the ETA box and moves Waze's speedometer
  * (with its speed-limit sign) to the car's right. Back on the centre display the turn box and speedometer are restored.
  *
- * Positions are fractions of the cluster window. They can be tuned without rebuilding: put keys from {@link #load}
- * in /sdcard/Android/data/com.waze/files/cluster.properties and send Waze to the cluster again.
+ * Positions are fractions of the cluster window, matched to the car's 1920x720 cluster.
  */
 public final class ClusterLayout implements Application.ActivityLifecycleCallbacks {
     private static final String TAG = "WazeCluster";
 
-    // shortcut: values from a single read per attach; a file edit needs Waze to move display (or restart).
-    private static float navX = 0.4f, navTop = 0.3f, navScale = 0.8f;
+    private static final float navX = 0.4f, navTop = 0.3f, navScale = 0.8f;
     // car marker (JConfig's own height is 0.8; lower = higher on screen). The alert state has its own height (car.y.alert),
     // kept from when Waze's ETA changed shape during alerts. car.y puts the car where the speedometer sits, just
     // above the ETA box (emulator cluster at the car's 1920x720); speed.dx then moves the speedometer right, clear of it.
-    private static float carX = 0.5f, carY = 0.71f, carYAlert = 0.71f, speedDx = 0.03f, speedScale = 1.4f;
+    private static final float carX = 0.5f, carY = 0.71f, carYAlert = 0.71f, speedDx = 0.03f, speedScale = 1.4f;
 
     /** True while a Waze window is on the cluster. */
     private static volatile boolean clusterActive;
@@ -60,7 +54,7 @@ public final class ClusterLayout implements Application.ActivityLifecycleCallbac
     @Override public void onActivitySaveInstanceState(Activity a, Bundle b) {}
     @Override public void onActivityDestroyed(Activity a) {
         // closed while on the cluster: no window is left there, so the floating button goes too
-        if (a.getWindow().getDecorView() == currentRoot) { currentRoot = null; clusterActive = false; ClusterButton.floating(app, false); }
+        if (a.getWindow().getDecorView() == currentRoot) { currentRoot = null; clusterActive = false; }
     }
 
     /** One layout listener per window; it re-checks the display on every pass, so a move between displays is seen. */
@@ -93,7 +87,6 @@ public final class ClusterLayout implements Application.ActivityLifecycleCallbac
         try {
             boolean cluster = onCluster(root);
             boolean was = Boolean.TRUE.equals(root.getTag(R_ON_CLUSTER));
-            if (cluster && !was) load();
             root.setTag(R_ON_CLUSTER, cluster);
             View nav = navBox(root);
             View speed = byName(root, "Speedometer");   // holds the dial and the speed-limit sign
@@ -120,8 +113,6 @@ public final class ClusterLayout implements Application.ActivityLifecycleCallbac
                 if (speed != null) { speed.setScaleX(1f); speed.setScaleY(1f); speed.setTranslationX(0f); }
                 if (currentRoot == root) { currentRoot = null; clusterActive = false; }
             }
-            ClusterButton.floating(app, clusterActive);
-            ClusterButton.remember(root);
         } catch (Throwable t) {
             Log.w(TAG, "apply failed", t);
         }
@@ -230,26 +221,5 @@ public final class ClusterLayout implements Application.ActivityLifecycleCallbac
         if (reanchoring) return;
         reanchoring = true;
         MAIN.postDelayed(REANCHOR, 500);
-    }
-
-    /** Optional on-car tuning (fractions of the window): nav.x, nav.top, nav.scale (turn box), car.x, car.y,
-     *  car.y.alert (car marker; .alert while an alert shows), speed.dx (speedometer shift to the right), speed.scale (its size). */
-    private static void load() {
-        File f = new File(app.getExternalFilesDir(null), "cluster.properties");
-        if (!f.isFile()) return;
-        Properties p = new Properties();
-        try (InputStream in = new FileInputStream(f)) {
-            p.load(in);
-            navX = num(p, "nav.x", navX); navTop = num(p, "nav.top", navTop); navScale = num(p, "nav.scale", navScale);
-            carX = num(p, "car.x", carX); carY = num(p, "car.y", carY); carYAlert = num(p, "car.y.alert", carYAlert);
-            speedDx = num(p, "speed.dx", speedDx); speedScale = num(p, "speed.scale", speedScale);
-            Log.i(TAG, "tuning " + p);
-        } catch (Throwable t) {
-            Log.w(TAG, "cluster.properties unreadable", t);
-        }
-    }
-
-    private static float num(Properties p, String k, float d) {
-        try { return Float.parseFloat(p.getProperty(k, Float.toString(d)).trim()); } catch (NumberFormatException e) { return d; }
     }
 }
